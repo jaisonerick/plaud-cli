@@ -1,0 +1,12 @@
+# Binary
+plaud
+plaud-api
+
+# OS
+.DS_Store
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
