@@ -8,15 +8,22 @@ import (
 	"github.com/spf13/cobra"
 )
 
+var tokenFlag string
+
 var loginCmd = &cobra.Command{
 	Use:   "login",
-	Short: "Authenticate with Plaud.ai using an email code",
-	Long: `Authenticate with Plaud.ai via the "Sign in with a code" flow.
+	Short: "Authenticate with Plaud.ai",
+	Long: `Authenticate with Plaud.ai via email code or access token.
 
-  plaud login                                    # Interactive prompt
-  PLAUD_EMAIL=x PLAUD_CODE=y PLAUD_OTP_TOKEN=z plaud login  # Skip prompts`,
+  plaud login                  # Interactive email code flow
+  plaud login --token TOKEN    # Use an existing access token`,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		ctx := cmd.Context()
+
+		// Direct token login (e.g. from browser session)
+		if tokenFlag != "" {
+			return saveToken(tokenFlag)
+		}
 
 		email := os.Getenv("PLAUD_EMAIL")
 		code := os.Getenv("PLAUD_CODE")
@@ -88,5 +95,6 @@ func saveToken(token string) error {
 }
 
 func init() {
+	loginCmd.Flags().StringVar(&tokenFlag, "token", "", "use an existing access token (e.g. from browser DevTools)")
 	rootCmd.AddCommand(loginCmd)
 }
