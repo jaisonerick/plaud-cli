@@ -50,6 +50,8 @@ echo "Extracting..."
 tar -xzf "${TMPDIR}/${ARCHIVE}" -C "$TMPDIR"
 
 echo "Installing to ${INSTALL_DIR}/${BINARY}..."
-install -m 755 "${TMPDIR}/${BINARY}" "${INSTALL_DIR}/${BINARY}"
+sudo mkdir -p "${INSTALL_DIR}"
+sudo cp "${TMPDIR}/${BINARY}" "${INSTALL_DIR}/${BINARY}"
+sudo chmod 755 "${INSTALL_DIR}/${BINARY}"
 
 echo "Done! Run 'plaud --help' to get started."
