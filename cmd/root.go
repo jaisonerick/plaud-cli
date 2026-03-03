@@ -5,8 +5,8 @@ import (
 	"net/http"
 	"os"
 
-	"github.com/jaisonerick/plaud-api/internal/api"
-	"github.com/jaisonerick/plaud-api/internal/config"
+	"github.com/jaisonerick/plaud-cli/internal/api"
+	"github.com/jaisonerick/plaud-cli/internal/config"
 	"github.com/spf13/cobra"
 )
 

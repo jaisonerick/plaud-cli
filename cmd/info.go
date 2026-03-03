@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/jaisonerick/plaud-api/internal/api"
+	"github.com/jaisonerick/plaud-cli/internal/api"
 	"github.com/spf13/cobra"
 )
 
@@ -27,27 +27,20 @@ var infoCmd = &cobra.Command{
 
 		fmt.Printf("ID:         %s\n", detail.ID)
 		fmt.Printf("Name:       %s\n", detail.Name)
-		fmt.Printf("Date:       %s\n", api.FormatDate(detail.CreatedAt))
-		fmt.Printf("Duration:   %s\n", api.FormatDuration(detail.Duration))
-		fmt.Printf("Type:       %s\n", detail.FileType)
+		fmt.Printf("Date:       %s\n", api.FormatEpochMs(detail.StartTime))
+		fmt.Printf("Duration:   %s\n", api.FormatDurationMs(detail.Duration))
 
 		if len(detail.Tags) > 0 {
-			names := make([]string, len(detail.Tags))
-			for i, t := range detail.Tags {
-				names[i] = t.Name
+			fmt.Printf("Tags:       %s\n", strings.Join(detail.Tags, ", "))
+		}
+
+		fmt.Printf("Transcript: %v\n", detail.HasTranscript())
+		fmt.Printf("Summary:    %v\n", detail.HasSummary())
+
+		for _, c := range detail.ContentList {
+			if c.TaskStatus == 1 && c.DataTitle != "" {
+				fmt.Printf("\n--- %s ---\n", c.DataTitle)
 			}
-			fmt.Printf("Tags:       %s\n", strings.Join(names, ", "))
-		}
-
-		fmt.Printf("Transcript: %v\n", detail.HasTranscript)
-		fmt.Printf("Summary:    %v\n", detail.HasSummary)
-
-		if detail.Transcript != "" {
-			fmt.Printf("\n--- Transcript ---\n%s\n", detail.Transcript)
-		}
-
-		if detail.Summary != "" {
-			fmt.Printf("\n--- Summary ---\n%s\n", detail.Summary)
 		}
 
 		return nil

@@ -1,12 +1,11 @@
 package cmd
 
 import (
-	"context"
 	"fmt"
 	"path/filepath"
 	"strings"
 
-	"github.com/jaisonerick/plaud-api/internal/api"
+	"github.com/jaisonerick/plaud-cli/internal/api"
 	"github.com/spf13/cobra"
 )
 
@@ -14,7 +13,6 @@ var (
 	dlAudio      bool
 	dlTranscript bool
 	dlSummary    bool
-	dlFormat     string
 	dlOutputDir  string
 )
 
@@ -25,9 +23,8 @@ var downloadCmd = &cobra.Command{
 
 Examples:
   plaud download abc123                              # Audio (MP3)
-  plaud download abc123 --transcript                 # Transcript as TXT
-  plaud download abc123 --transcript --format srt    # Transcript as SRT
-  plaud download abc123 --summary --format md        # Summary as Markdown
+  plaud download abc123 --transcript                 # Transcript
+  plaud download abc123 --summary                    # Summary (Markdown)
   plaud download abc123 --audio --transcript --summary --output-dir ./out`,
 	Args: cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
@@ -39,13 +36,13 @@ Examples:
 			dlAudio = true
 		}
 
-		// Fetch recording details for naming
+		// Fetch recording details for naming and content URLs
 		detail, err := client.GetDetail(ctx, id)
 		if err != nil {
 			return fmt.Errorf("fetching recording details: %w", err)
 		}
 
-		baseName := sanitizeFilename(detail.Name) + "_" + strings.ReplaceAll(api.FormatDate(detail.CreatedAt), " ", "_")
+		baseName := sanitizeFilename(detail.Name) + "_" + strings.ReplaceAll(api.FormatEpochMs(detail.StartTime), " ", "_")
 
 		if dlAudio {
 			fmt.Print("Downloading audio... ")
@@ -54,12 +51,7 @@ Examples:
 				return fmt.Errorf("getting download URL: %w", err)
 			}
 
-			ext := ".mp3"
-			if detail.FileType != "" {
-				ext = "." + strings.ToLower(detail.FileType)
-			}
-			dest := filepath.Join(dlOutputDir, baseName+ext)
-
+			dest := filepath.Join(dlOutputDir, baseName+".mp3")
 			if err := client.DownloadFile(ctx, tempURL, dest); err != nil {
 				return fmt.Errorf("downloading audio: %w", err)
 			}
@@ -67,41 +59,35 @@ Examples:
 		}
 
 		if dlTranscript {
-			if err := downloadDocument(ctx, detail, "transcript"); err != nil {
-				return err
+			url := detail.TranscriptURL()
+			if url == "" {
+				fmt.Println("No transcript available for this recording.")
+			} else {
+				fmt.Print("Downloading transcript... ")
+				dest := filepath.Join(dlOutputDir, baseName+"_transcript.json")
+				if err := client.DownloadGzipped(ctx, url, dest); err != nil {
+					return fmt.Errorf("downloading transcript: %w", err)
+				}
+				fmt.Printf("saved to %s\n", dest)
 			}
 		}
 
 		if dlSummary {
-			if err := downloadDocument(ctx, detail, "summary"); err != nil {
-				return err
+			url := detail.SummaryURL()
+			if url == "" {
+				fmt.Println("No summary available for this recording.")
+			} else {
+				fmt.Print("Downloading summary... ")
+				dest := filepath.Join(dlOutputDir, baseName+"_summary.md")
+				if err := client.DownloadGzipped(ctx, url, dest); err != nil {
+					return fmt.Errorf("downloading summary: %w", err)
+				}
+				fmt.Printf("saved to %s\n", dest)
 			}
 		}
 
 		return nil
 	},
-}
-
-func downloadDocument(ctx context.Context, detail *api.RecordingDetail, docType string) error {
-	format := dlFormat
-	if format == "" {
-		format = "txt"
-	}
-
-	baseName := sanitizeFilename(detail.Name) + "_" + strings.ReplaceAll(api.FormatDate(detail.CreatedAt), " ", "_")
-
-	fmt.Printf("Exporting %s (%s)... ", docType, format)
-	url, err := client.ExportDocument(ctx, detail.ID, docType, format)
-	if err != nil {
-		return fmt.Errorf("exporting %s: %w", docType, err)
-	}
-
-	dest := filepath.Join(dlOutputDir, baseName+"_"+docType+"."+format)
-	if err := client.DownloadFile(ctx, url, dest); err != nil {
-		return fmt.Errorf("downloading %s: %w", docType, err)
-	}
-	fmt.Printf("saved to %s\n", dest)
-	return nil
 }
 
 func sanitizeFilename(name string) string {
@@ -128,7 +114,6 @@ func init() {
 	downloadCmd.Flags().BoolVar(&dlAudio, "audio", false, "download audio file")
 	downloadCmd.Flags().BoolVar(&dlTranscript, "transcript", false, "download transcript")
 	downloadCmd.Flags().BoolVar(&dlSummary, "summary", false, "download summary")
-	downloadCmd.Flags().StringVar(&dlFormat, "format", "txt", "export format: txt, srt, md, docx, pdf")
 	downloadCmd.Flags().StringVar(&dlOutputDir, "output-dir", ".", "output directory")
 	rootCmd.AddCommand(downloadCmd)
 }

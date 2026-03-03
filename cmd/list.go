@@ -7,7 +7,7 @@ import (
 	"text/tabwriter"
 	"os"
 
-	"github.com/jaisonerick/plaud-api/internal/api"
+	"github.com/jaisonerick/plaud-cli/internal/api"
 	"github.com/spf13/cobra"
 )
 
@@ -59,8 +59,8 @@ var listCmd = &cobra.Command{
 
 			fmt.Fprintf(w, "%s\t%s\t%s\t%s\t%s\t%s\t%s\n",
 				r.ID,
-				api.FormatDate(r.CreatedAt),
-				api.FormatDuration(r.Duration),
+				api.FormatEpochMs(r.StartTime),
+				api.FormatDurationMs(r.Duration),
 				truncate(r.Name, 40),
 				strings.Join(tagNames, ", "),
 				transcript,

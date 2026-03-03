@@ -3,106 +3,90 @@ package cmd
 import (
 	"fmt"
 	"os"
-	"os/exec"
 	"strings"
-
-	"golang.org/x/term"
 
 	"github.com/spf13/cobra"
 )
 
-var opRef string
-
 var loginCmd = &cobra.Command{
 	Use:   "login",
-	Short: "Authenticate with Plaud.ai",
-	Long: `Authenticate with Plaud.ai. Three modes:
+	Short: "Authenticate with Plaud.ai using an email code",
+	Long: `Authenticate with Plaud.ai via the "Sign in with a code" flow.
 
   plaud login                                    # Interactive prompt
-  plaud login --op op://Personal/Plaud           # 1Password
-  PLAUD_USERNAME=x PLAUD_PASSWORD=y plaud login  # Environment variables`,
+  PLAUD_EMAIL=x PLAUD_CODE=y PLAUD_OTP_TOKEN=z plaud login  # Skip prompts`,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		ctx := cmd.Context()
 
-		username, password, err := getCredentials()
-		if err != nil {
-			return err
+		email := os.Getenv("PLAUD_EMAIL")
+		code := os.Getenv("PLAUD_CODE")
+		otpToken := os.Getenv("PLAUD_OTP_TOKEN")
+
+		// If all env vars are set, skip prompts entirely
+		if otpToken != "" && code != "" {
+			fmt.Print("Authenticating... ")
+			token, err := client.VerifyCode(ctx, otpToken, code)
+			if err != nil {
+				fmt.Println("failed.")
+				return fmt.Errorf("login failed: %w", err)
+			}
+			fmt.Println("ok.")
+			return saveToken(token)
 		}
 
+		// Step 1: get email
+		if email == "" {
+			fmt.Print("Email: ")
+			if _, err := fmt.Scanln(&email); err != nil {
+				return fmt.Errorf("reading email: %w", err)
+			}
+			email = strings.TrimSpace(email)
+		}
+
+		// Step 2: send code
+		fmt.Printf("Sending code to %s... ", email)
+		otp, err := client.SendCode(ctx, email)
+		if err != nil {
+			fmt.Println("failed.")
+			return fmt.Errorf("sending code: %w", err)
+		}
+		fmt.Println("ok.")
+
+		// Step 3: get code
+		if code == "" {
+			fmt.Print("Code: ")
+			if _, err := fmt.Scanln(&code); err != nil {
+				return fmt.Errorf("reading code: %w", err)
+			}
+			code = strings.TrimSpace(code)
+		}
+
+		// Step 4: verify
 		fmt.Print("Authenticating... ")
-		token, err := client.Login(ctx, username, password)
+		token, err := client.VerifyCode(ctx, otp, code)
 		if err != nil {
 			fmt.Println("failed.")
 			return fmt.Errorf("login failed: %w", err)
 		}
 		fmt.Println("ok.")
 
-		cfg.AccessToken = token
-		cfg.BaseURL = client.BaseURL
-		cfg.EnsureDeviceID()
-
-		if err := cfg.Save(); err != nil {
-			return fmt.Errorf("saving config: %w", err)
-		}
-
-		fmt.Println("Token saved. You're logged in.")
-		return nil
+		return saveToken(token)
 	},
 }
 
-func getCredentials() (string, string, error) {
-	// Priority: env vars → --op flag → interactive
-	if u, p := os.Getenv("PLAUD_USERNAME"), os.Getenv("PLAUD_PASSWORD"); u != "" && p != "" {
-		return u, p, nil
+func saveToken(token string) error {
+	cfg.AccessToken = token
+	cfg.BaseURL = client.BaseURL
+	cfg.EnsureDeviceID()
+
+	if err := cfg.Save(); err != nil {
+		return fmt.Errorf("saving config: %w", err)
 	}
 
-	if opRef != "" {
-		return getCredentialsFromOP(opRef)
-	}
-
-	return getCredentialsInteractive()
-}
-
-func getCredentialsFromOP(ref string) (string, string, error) {
-	username, err := opRead(ref + "/username")
-	if err != nil {
-		return "", "", fmt.Errorf("reading username from 1Password: %w", err)
-	}
-
-	password, err := opRead(ref + "/password")
-	if err != nil {
-		return "", "", fmt.Errorf("reading password from 1Password: %w", err)
-	}
-
-	return username, password, nil
-}
-
-func opRead(ref string) (string, error) {
-	out, err := exec.Command("op", "read", ref).Output()
-	if err != nil {
-		return "", err
-	}
-	return strings.TrimSpace(string(out)), nil
-}
-
-func getCredentialsInteractive() (string, string, error) {
-	fmt.Print("Email: ")
-	var email string
-	if _, err := fmt.Scanln(&email); err != nil {
-		return "", "", fmt.Errorf("reading email: %w", err)
-	}
-
-	fmt.Print("Password: ")
-	passBytes, err := term.ReadPassword(int(os.Stdin.Fd()))
-	fmt.Println()
-	if err != nil {
-		return "", "", fmt.Errorf("reading password: %w", err)
-	}
-
-	return strings.TrimSpace(email), string(passBytes), nil
+	fmt.Println("Token saved. You're logged in.")
+	return nil
 }
 
 func init() {
-	loginCmd.Flags().StringVar(&opRef, "op", "", "1Password item reference (e.g. op://Personal/Plaud)")
 	rootCmd.AddCommand(loginCmd)
 }

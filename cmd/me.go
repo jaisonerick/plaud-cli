@@ -25,8 +25,8 @@ var meCmd = &cobra.Command{
 		fmt.Printf("ID:      %s\n", user.ID)
 		fmt.Printf("Email:   %s\n", user.Email)
 		fmt.Printf("Name:    %s\n", user.Nickname)
-		if user.CreatedAt != "" {
-			fmt.Printf("Joined:  %s\n", user.CreatedAt)
+		if user.Country != "" {
+			fmt.Printf("Country: %s\n", user.Country)
 		}
 
 		return nil

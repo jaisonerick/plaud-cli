@@ -1,6 +1,6 @@
 package main
 
-import "github.com/jaisonerick/plaud-api/cmd"
+import "github.com/jaisonerick/plaud-cli/cmd"
 
 func main() {
 	cmd.Execute()

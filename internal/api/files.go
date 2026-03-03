@@ -5,7 +5,7 @@ import "context"
 // ListRecordings returns all recordings (simplified view).
 func (c *Client) ListRecordings(ctx context.Context) ([]RecordingSimple, error) {
 	var resp RecordingListResponse
-	if err := c.Do(ctx, "GET", "/file/simple/web?skip=0&limit=99999&sort=-created_at", nil, &resp); err != nil {
+	if err := c.Do(ctx, "GET", "/file/simple/web?skip=0&limit=99999&is_trash=2&sort_by=start_time&is_desc=true", nil, &resp); err != nil {
 		return nil, err
 	}
 	return resp.Data, nil
