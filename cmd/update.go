@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"time"
 
 	"github.com/spf13/cobra"
 )
@@ -25,6 +26,95 @@ type ghAsset struct {
 	BrowserDownloadURL string `json:"browser_download_url"`
 }
 
+type updateState struct {
+	CheckedAt     time.Time `json:"checked_at"`
+	LatestVersion string    `json:"latest_version"`
+}
+
+func updateStatePath() (string, error) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(home, ".config", "plaud", "update-state.json"), nil
+}
+
+func loadUpdateState() *updateState {
+	p, err := updateStatePath()
+	if err != nil {
+		return nil
+	}
+	data, err := os.ReadFile(p)
+	if err != nil {
+		return nil
+	}
+	var s updateState
+	if json.Unmarshal(data, &s) != nil {
+		return nil
+	}
+	return &s
+}
+
+func saveUpdateState(s *updateState) {
+	p, err := updateStatePath()
+	if err != nil {
+		return
+	}
+	data, _ := json.Marshal(s)
+	os.MkdirAll(filepath.Dir(p), 0700)
+	os.WriteFile(p, data, 0600)
+}
+
+func fetchLatestRelease() (*ghRelease, error) {
+	resp, err := http.Get("https://api.github.com/repos/jaisonerick/plaud-cli/releases/latest")
+	if err != nil {
+		return nil, fmt.Errorf("fetching latest release: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("GitHub API returned %d", resp.StatusCode)
+	}
+
+	var release ghRelease
+	if err := json.NewDecoder(resp.Body).Decode(&release); err != nil {
+		return nil, fmt.Errorf("parsing release: %w", err)
+	}
+	return &release, nil
+}
+
+// CheckForUpdate checks if a newer version is available, at most once per day.
+// Prints a notice to stderr if an update is available. Errors are silently ignored.
+func CheckForUpdate() {
+	if Version == "dev" {
+		return
+	}
+
+	state := loadUpdateState()
+	if state != nil && time.Since(state.CheckedAt) < 24*time.Hour {
+		// Use cached result
+		if state.LatestVersion != "" && state.LatestVersion != Version {
+			fmt.Fprintf(os.Stderr, "\nA new version of plaud is available: v%s → v%s\nRun `plaud update` to upgrade.\n", Version, state.LatestVersion)
+		}
+		return
+	}
+
+	release, err := fetchLatestRelease()
+	if err != nil {
+		return
+	}
+
+	latest := strings.TrimPrefix(release.TagName, "v")
+	saveUpdateState(&updateState{
+		CheckedAt:     time.Now(),
+		LatestVersion: latest,
+	})
+
+	if latest != Version {
+		fmt.Fprintf(os.Stderr, "\nA new version of plaud is available: v%s → v%s\nRun `plaud update` to upgrade.\n", Version, latest)
+	}
+}
+
 func init() {
 	rootCmd.AddCommand(updateCmd)
 }
@@ -34,23 +124,20 @@ var updateCmd = &cobra.Command{
 	Short: "Update plaud to the latest version",
 	RunE: func(cmd *cobra.Command, args []string) error {
 		// 1. Fetch latest release
-		resp, err := http.Get("https://api.github.com/repos/jaisonerick/plaud-cli/releases/latest")
+		release, err := fetchLatestRelease()
 		if err != nil {
-			return fmt.Errorf("fetching latest release: %w", err)
-		}
-		defer resp.Body.Close()
-
-		if resp.StatusCode != http.StatusOK {
-			return fmt.Errorf("GitHub API returned %d", resp.StatusCode)
-		}
-
-		var release ghRelease
-		if err := json.NewDecoder(resp.Body).Decode(&release); err != nil {
-			return fmt.Errorf("parsing release: %w", err)
+			return err
 		}
 
 		// 2. Compare versions
 		latest := strings.TrimPrefix(release.TagName, "v")
+
+		// Always update the cache when explicitly running update
+		saveUpdateState(&updateState{
+			CheckedAt:     time.Now(),
+			LatestVersion: latest,
+		})
+
 		if latest == Version {
 			fmt.Printf("Already up to date (v%s)\n", Version)
 			return nil

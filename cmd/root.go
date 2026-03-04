@@ -23,6 +23,11 @@ var rootCmd = &cobra.Command{
 	Use:     "plaud",
 	Short:   "CLI client for Plaud.ai",
 	Version: Version,
+	PersistentPostRun: func(cmd *cobra.Command, args []string) {
+		if cmd.Name() != "update" {
+			CheckForUpdate()
+		}
+	},
 	PersistentPreRunE: func(cmd *cobra.Command, args []string) error {
 		var err error
 		cfg, err = config.Load()
