@@ -140,23 +140,6 @@ func cacheTranscript(cacheDir, id string, data []byte) error {
 	return os.WriteFile(filepath.Join(cacheDir, id+".json"), data, 0644)
 }
 
-// fetchTranscriptSegments downloads and parses a transcript for a recording.
-// Uses cache if available and caching is enabled.
-func fetchTranscriptSegments(r api.RecordingSimple, useCache bool) ([]transcript.Segment, error) {
-	cacheDir, err := transcriptCacheDir()
-	if err != nil {
-		return nil, err
-	}
-
-	if useCache {
-		if segments, err := loadCachedTranscript(cacheDir, r.ID); err == nil {
-			return segments, nil
-		}
-	}
-
-	return nil, fmt.Errorf("not cached")
-}
-
 func init() {
 	searchCmd.Flags().IntVar(&searchLimit, "limit", 0, "limit number of recordings to show")
 	searchCmd.Flags().BoolVar(&searchNoCache, "no-cache", false, "bypass transcript cache")
