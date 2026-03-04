@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strings"
@@ -208,14 +209,33 @@ var updateCmd = &cobra.Command{
 			return fmt.Errorf("resolving executable path: %w", err)
 		}
 
-		tmpPath := execPath + ".new"
-		if err := os.WriteFile(tmpPath, newBinary, 0755); err != nil {
+		// Write to a temp file first
+		tmpFile, err := os.CreateTemp("", "plaud-update-*")
+		if err != nil {
+			return fmt.Errorf("creating temp file: %w", err)
+		}
+		tmpPath := tmpFile.Name()
+
+		if _, err := tmpFile.Write(newBinary); err != nil {
+			tmpFile.Close()
+			os.Remove(tmpPath)
 			return fmt.Errorf("writing new binary: %w", err)
 		}
+		tmpFile.Close()
+		os.Chmod(tmpPath, 0755)
 
+		// Try direct rename first (works when same filesystem + writable)
 		if err := os.Rename(tmpPath, execPath); err != nil {
+			// Fall back to sudo cp for permission-restricted paths like /usr/local/bin
+			sudoCmd := exec.Command("sudo", "cp", tmpPath, execPath)
+			sudoCmd.Stdin = os.Stdin
+			sudoCmd.Stdout = os.Stdout
+			sudoCmd.Stderr = os.Stderr
+			if sudoErr := sudoCmd.Run(); sudoErr != nil {
+				os.Remove(tmpPath)
+				return fmt.Errorf("replacing binary (tried sudo): %w", sudoErr)
+			}
 			os.Remove(tmpPath)
-			return fmt.Errorf("replacing binary: %w", err)
 		}
 
 		fmt.Printf("Updated to v%s\n", latest)
