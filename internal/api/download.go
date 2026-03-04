@@ -64,3 +64,40 @@ func (c *Client) DownloadGzipped(ctx context.Context, fileURL, destPath string) 
 
 	return nil
 }
+
+// FetchGzipped fetches a gzipped presigned URL and returns the decompressed content.
+func (c *Client) FetchGzipped(ctx context.Context, fileURL string) ([]byte, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, fileURL, nil)
+	if err != nil {
+		return nil, fmt.Errorf("creating download request: %w", err)
+	}
+
+	req.Header.Set("Accept-Encoding", "identity")
+
+	resp, err := c.HTTP.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("downloading: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("download returned status %d", resp.StatusCode)
+	}
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("reading response: %w", err)
+	}
+
+	gr, err := gzip.NewReader(bytes.NewReader(body))
+	if err == nil {
+		content, err := io.ReadAll(gr)
+		gr.Close()
+		if err != nil {
+			return nil, fmt.Errorf("decompressing: %w", err)
+		}
+		return content, nil
+	}
+
+	return body, nil
+}
