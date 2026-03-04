@@ -10,6 +10,8 @@ import (
 	"github.com/spf13/cobra"
 )
 
+var Version = "dev"
+
 var (
 	debug   bool
 	jsonOut bool
@@ -18,8 +20,9 @@ var (
 )
 
 var rootCmd = &cobra.Command{
-	Use:   "plaud",
-	Short: "CLI client for Plaud.ai",
+	Use:     "plaud",
+	Short:   "CLI client for Plaud.ai",
+	Version: Version,
 	PersistentPreRunE: func(cmd *cobra.Command, args []string) error {
 		var err error
 		cfg, err = config.Load()
