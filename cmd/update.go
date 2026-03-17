@@ -1,8 +1,6 @@
 package cmd
 
 import (
-	"archive/tar"
-	"compress/gzip"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -120,6 +118,14 @@ func init() {
 	rootCmd.AddCommand(updateCmd)
 }
 
+func assetName() string {
+	name := fmt.Sprintf("plaud-cli_%s_%s", runtime.GOOS, runtime.GOARCH)
+	if runtime.GOOS == "windows" {
+		name += ".exe"
+	}
+	return name
+}
+
 var updateCmd = &cobra.Command{
 	Use:   "update",
 	Short: "Update plaud to the latest version",
@@ -133,7 +139,6 @@ var updateCmd = &cobra.Command{
 		// 2. Compare versions
 		latest := strings.TrimPrefix(release.TagName, "v")
 
-		// Always update the cache when explicitly running update
 		saveUpdateState(&updateState{
 			CheckedAt:     time.Now(),
 			LatestVersion: latest,
@@ -145,10 +150,10 @@ var updateCmd = &cobra.Command{
 		}
 
 		// 3. Find the right asset
-		archiveName := fmt.Sprintf("plaud-cli_%s_%s.tar.gz", runtime.GOOS, runtime.GOARCH)
+		name := assetName()
 		var downloadURL string
 		for _, a := range release.Assets {
-			if a.Name == archiveName {
+			if a.Name == name {
 				downloadURL = a.BrowserDownloadURL
 				break
 			}
@@ -159,7 +164,7 @@ var updateCmd = &cobra.Command{
 
 		fmt.Printf("Updating v%s → v%s ...\n", Version, latest)
 
-		// 4. Download tarball
+		// 4. Download binary
 		dlResp, err := http.Get(downloadURL)
 		if err != nil {
 			return fmt.Errorf("downloading release: %w", err)
@@ -170,36 +175,12 @@ var updateCmd = &cobra.Command{
 			return fmt.Errorf("download returned %d", dlResp.StatusCode)
 		}
 
-		// 5. Extract binary from tarball
-		gz, err := gzip.NewReader(dlResp.Body)
+		newBinary, err := io.ReadAll(dlResp.Body)
 		if err != nil {
-			return fmt.Errorf("decompressing: %w", err)
-		}
-		defer gz.Close()
-
-		tr := tar.NewReader(gz)
-		var newBinary []byte
-		for {
-			hdr, err := tr.Next()
-			if err == io.EOF {
-				break
-			}
-			if err != nil {
-				return fmt.Errorf("reading tar: %w", err)
-			}
-			if hdr.Name == "plaud" {
-				newBinary, err = io.ReadAll(tr)
-				if err != nil {
-					return fmt.Errorf("reading binary from tar: %w", err)
-				}
-				break
-			}
-		}
-		if newBinary == nil {
-			return fmt.Errorf("binary not found in archive")
+			return fmt.Errorf("reading binary: %w", err)
 		}
 
-		// 6. Replace self
+		// 5. Replace self
 		execPath, err := os.Executable()
 		if err != nil {
 			return fmt.Errorf("finding current executable: %w", err)
@@ -210,7 +191,7 @@ var updateCmd = &cobra.Command{
 		}
 
 		// Write to a temp file first
-		tmpFile, err := os.CreateTemp("", "plaud-update-*")
+		tmpFile, err := os.CreateTemp(filepath.Dir(execPath), "plaud-update-*")
 		if err != nil {
 			return fmt.Errorf("creating temp file: %w", err)
 		}
@@ -224,16 +205,18 @@ var updateCmd = &cobra.Command{
 		tmpFile.Close()
 		os.Chmod(tmpPath, 0755)
 
-		// Try direct rename first (works when same filesystem + writable)
+		// Try direct rename first
 		if err := os.Rename(tmpPath, execPath); err != nil {
-			// Fall back to sudo cp for permission-restricted paths like /usr/local/bin
-			sudoCmd := exec.Command("sudo", "cp", tmpPath, execPath)
-			sudoCmd.Stdin = os.Stdin
-			sudoCmd.Stdout = os.Stdout
-			sudoCmd.Stderr = os.Stderr
-			if sudoErr := sudoCmd.Run(); sudoErr != nil {
-				os.Remove(tmpPath)
-				return fmt.Errorf("replacing binary (tried sudo): %w", sudoErr)
+			if runtime.GOOS != "windows" {
+				// Fall back to sudo cp for permission-restricted paths like /usr/local/bin
+				sudoCmd := exec.Command("sudo", "cp", tmpPath, execPath)
+				sudoCmd.Stdin = os.Stdin
+				sudoCmd.Stdout = os.Stdout
+				sudoCmd.Stderr = os.Stderr
+				if sudoErr := sudoCmd.Run(); sudoErr != nil {
+					os.Remove(tmpPath)
+					return fmt.Errorf("replacing binary (tried sudo): %w", sudoErr)
+				}
 			}
 			os.Remove(tmpPath)
 		}

@@ -3,15 +3,13 @@ set -euo pipefail
 
 REPO="jaisonerick/plaud-cli"
 INSTALL_DIR="/usr/local/bin"
-BINARY="plaud"
 
 OS=$(uname -s | tr '[:upper:]' '[:lower:]')
 ARCH=$(uname -m)
 
 case "$ARCH" in
   x86_64) ARCH="amd64" ;;
-  aarch64) ARCH="arm64" ;;
-  arm64) ARCH="arm64" ;;
+  aarch64|arm64) ARCH="arm64" ;;
   *)
     echo "Unsupported architecture: $ARCH"
     exit 1
@@ -37,21 +35,11 @@ fi
 
 echo "Latest release: ${TAG}"
 
-ARCHIVE="plaud-cli_${OS}_${ARCH}.tar.gz"
-URL="https://github.com/${REPO}/releases/download/${TAG}/${ARCHIVE}"
-
-TMPDIR=$(mktemp -d)
-trap 'rm -rf "$TMPDIR"' EXIT
+URL="https://github.com/${REPO}/releases/download/${TAG}/plaud-cli_${OS}_${ARCH}"
 
 echo "Downloading ${URL}..."
-curl -sSfL "$URL" -o "${TMPDIR}/${ARCHIVE}"
-
-echo "Extracting..."
-tar -xzf "${TMPDIR}/${ARCHIVE}" -C "$TMPDIR"
-
-echo "Installing to ${INSTALL_DIR}/${BINARY}..."
 sudo mkdir -p "${INSTALL_DIR}"
-sudo cp "${TMPDIR}/${BINARY}" "${INSTALL_DIR}/${BINARY}"
-sudo chmod 755 "${INSTALL_DIR}/${BINARY}"
+curl -sSfL "$URL" | sudo tee "${INSTALL_DIR}/plaud" > /dev/null
+sudo chmod 755 "${INSTALL_DIR}/plaud"
 
 echo "Done! Run 'plaud --help' to get started."
