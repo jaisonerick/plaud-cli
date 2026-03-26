@@ -57,6 +57,11 @@ Examples:
 			return fmt.Errorf("unsupported format %q (use json, txt, srt, or md)", dlFormat)
 		}
 
+		// Ensure output directory exists
+		if err := os.MkdirAll(dlOutputDir, 0755); err != nil {
+			return fmt.Errorf("creating output directory: %w", err)
+		}
+
 		// Fetch recording details for naming and content URLs
 		detail, err := client.GetDetail(ctx, id)
 		if err != nil {
