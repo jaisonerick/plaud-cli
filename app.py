@@ -25,7 +25,7 @@ model_cache = modal.Volume.from_name("whisper-model-cache", create_if_missing=Tr
     secrets=[modal.Secret.from_name("huggingface-secret")],
     volumes={"/cache": model_cache},
     timeout=600,
-    container_idle_timeout=120,
+    scaledown_window=120,
 )
 class WhisperTranscriber:
     @modal.enter()
@@ -45,6 +45,7 @@ class WhisperTranscriber:
 
     @modal.method()
     def transcribe(self, audio_data: bytes, diarize: bool = False) -> list[dict]:
+        import torch
         import whisperx
 
         hf_token = os.environ.get("HF_TOKEN", "")
@@ -76,14 +77,30 @@ class WhisperTranscriber:
 
             # 3. Optionally diarize
             if diarize and hf_token:
-                from whisperx.diarize import DiarizationPipeline
+                from pyannote.audio import Pipeline as PyannotePipeline
 
-                diarize_pipeline = DiarizationPipeline(
-                    use_auth_token=hf_token,
-                    device=self.device,
-                )
-                diarize_segments = diarize_pipeline(audio_path)
-                result = whisperx.assign_word_speakers(diarize_segments, result)
+                diarize_model = PyannotePipeline.from_pretrained(
+                    "pyannote/speaker-diarization-community-1",
+                    token=hf_token,
+                    cache_dir="/cache/huggingface",
+                ).to(torch.device("cuda"))
+
+                diarize_result = diarize_model(audio_path)
+
+                # Assign speakers to segments based on overlap with diarization
+                for seg in result["segments"]:
+                    seg_start = seg["start"]
+                    seg_end = seg["end"]
+                    best_speaker = ""
+                    best_overlap = 0.0
+
+                    for turn, _, speaker in diarize_result.itertracks(yield_label=True):
+                        overlap = max(0, min(seg_end, turn.end) - max(seg_start, turn.start))
+                        if overlap > best_overlap:
+                            best_overlap = overlap
+                            best_speaker = speaker
+
+                    seg["speaker"] = best_speaker
 
             # 4. Convert to plaud-cli contract format
             segments = []
