@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"strings"
 
 	modalclient "github.com/modal-labs/modal-client/go"
 
@@ -51,21 +52,49 @@ func Transcribe(ctx context.Context, cfg *Config, audioData []byte, diarize bool
 	}
 	defer client.Close()
 
-	fn, err := client.Functions.FromName(ctx, cfg.AppName, cfg.FunctionName, nil)
-	if err != nil {
-		return nil, fmt.Errorf("looking up modal function %s/%s: %w", cfg.AppName, cfg.FunctionName, err)
+	// FunctionName can be "ClassName.method" for class methods or just "function_name"
+	var result any
+	if parts := strings.SplitN(cfg.FunctionName, ".", 2); len(parts) == 2 {
+		cls, err := client.Cls.FromName(ctx, cfg.AppName, parts[0], nil)
+		if err != nil {
+			return nil, fmt.Errorf("looking up modal class %s/%s: %w", cfg.AppName, parts[0], err)
+		}
+
+		instance, err := cls.Instance(ctx, nil)
+		if err != nil {
+			return nil, fmt.Errorf("creating modal class instance: %w", err)
+		}
+
+		method, err := instance.Method(parts[1])
+		if err != nil {
+			return nil, fmt.Errorf("looking up method %s: %w", parts[1], err)
+		}
+
+		result, err = method.Remote(ctx, []any{audioData}, map[string]any{
+			"diarize": diarize,
+		})
+		if err != nil {
+			return nil, fmt.Errorf("calling modal method: %w", err)
+		}
+	} else {
+		fn, err := client.Functions.FromName(ctx, cfg.AppName, cfg.FunctionName, nil)
+		if err != nil {
+			return nil, fmt.Errorf("looking up modal function %s/%s: %w", cfg.AppName, cfg.FunctionName, err)
+		}
+
+		result, err = fn.Remote(ctx, []any{audioData}, map[string]any{
+			"diarize": diarize,
+		})
+		if err != nil {
+			return nil, fmt.Errorf("calling modal function: %w", err)
+		}
 	}
 
-	result, err := fn.Remote(ctx, []any{audioData}, map[string]any{
-		"diarize": diarize,
-	})
-	if err != nil {
-		return nil, fmt.Errorf("calling modal function: %w", err)
-	}
+	// Modal's pickle-based protocol returns map[interface{}]interface{}.
+	// Convert to JSON-compatible types before marshaling.
+	converted := convertToJSON(result)
 
-	// The Modal function returns a JSON-serializable structure.
-	// Marshal back to JSON then unmarshal into our Segment type.
-	raw, err := json.Marshal(result)
+	raw, err := json.Marshal(converted)
 	if err != nil {
 		return nil, fmt.Errorf("marshaling modal result: %w", err)
 	}
@@ -76,4 +105,31 @@ func Transcribe(ctx context.Context, cfg *Config, audioData []byte, diarize bool
 	}
 
 	return segments, nil
+}
+
+// convertToJSON recursively converts map[interface{}]interface{} to map[string]any
+// so the result can be marshaled to JSON.
+func convertToJSON(v any) any {
+	switch val := v.(type) {
+	case map[any]any:
+		m := make(map[string]any, len(val))
+		for k, v := range val {
+			m[fmt.Sprintf("%v", k)] = convertToJSON(v)
+		}
+		return m
+	case map[string]any:
+		m := make(map[string]any, len(val))
+		for k, v := range val {
+			m[k] = convertToJSON(v)
+		}
+		return m
+	case []any:
+		s := make([]any, len(val))
+		for i, v := range val {
+			s[i] = convertToJSON(v)
+		}
+		return s
+	default:
+		return v
+	}
 }
