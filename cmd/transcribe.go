@@ -27,8 +27,6 @@ deployed on Modal. Supports speaker diarization.
 Requires environment variables:
   MODAL_TOKEN_ID       Modal authentication token ID
   MODAL_TOKEN_SECRET   Modal authentication token secret
-  MODAL_APP_NAME       Name of the deployed Modal app
-  MODAL_FUNCTION_NAME  Name of the transcription function
 
 Examples:
   plaud transcribe abc123
@@ -43,7 +41,7 @@ Examples:
 		// Check Modal configuration
 		modalCfg := modal.LoadConfig()
 		if modalCfg == nil {
-			return fmt.Errorf("Modal not configured. Set MODAL_TOKEN_ID, MODAL_TOKEN_SECRET, MODAL_APP_NAME, and MODAL_FUNCTION_NAME environment variables")
+			return fmt.Errorf("Modal not configured. Set MODAL_TOKEN_ID and MODAL_TOKEN_SECRET environment variables")
 		}
 
 		// Validate format

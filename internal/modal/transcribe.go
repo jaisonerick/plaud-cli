@@ -5,19 +5,22 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
-	"strings"
 
 	modalclient "github.com/modal-labs/modal-client/go"
 
 	"github.com/jaisonerick/plaud-cli/internal/transcript"
 )
 
-// Config holds the Modal connection settings from environment variables.
+const (
+	appName   = "modal-whisper"
+	className = "WhisperTranscriber"
+	method    = "transcribe"
+)
+
+// Config holds the Modal authentication from environment variables.
 type Config struct {
-	TokenID      string
-	TokenSecret  string
-	AppName      string
-	FunctionName string
+	TokenID     string
+	TokenSecret string
 }
 
 // LoadConfig reads Modal configuration from environment variables.
@@ -25,18 +28,14 @@ type Config struct {
 func LoadConfig() *Config {
 	tokenID := os.Getenv("MODAL_TOKEN_ID")
 	tokenSecret := os.Getenv("MODAL_TOKEN_SECRET")
-	appName := os.Getenv("MODAL_APP_NAME")
-	functionName := os.Getenv("MODAL_FUNCTION_NAME")
 
-	if tokenID == "" || tokenSecret == "" || appName == "" || functionName == "" {
+	if tokenID == "" || tokenSecret == "" {
 		return nil
 	}
 
 	return &Config{
-		TokenID:      tokenID,
-		TokenSecret:  tokenSecret,
-		AppName:      appName,
-		FunctionName: functionName,
+		TokenID:     tokenID,
+		TokenSecret: tokenSecret,
 	}
 }
 
@@ -52,42 +51,26 @@ func Transcribe(ctx context.Context, cfg *Config, audioData []byte, diarize bool
 	}
 	defer client.Close()
 
-	// FunctionName can be "ClassName.method" for class methods or just "function_name"
-	var result any
-	if parts := strings.SplitN(cfg.FunctionName, ".", 2); len(parts) == 2 {
-		cls, err := client.Cls.FromName(ctx, cfg.AppName, parts[0], nil)
-		if err != nil {
-			return nil, fmt.Errorf("looking up modal class %s/%s: %w", cfg.AppName, parts[0], err)
-		}
+	cls, err := client.Cls.FromName(ctx, appName, className, nil)
+	if err != nil {
+		return nil, fmt.Errorf("looking up modal class %s/%s: %w", appName, className, err)
+	}
 
-		instance, err := cls.Instance(ctx, nil)
-		if err != nil {
-			return nil, fmt.Errorf("creating modal class instance: %w", err)
-		}
+	instance, err := cls.Instance(ctx, nil)
+	if err != nil {
+		return nil, fmt.Errorf("creating modal class instance: %w", err)
+	}
 
-		method, err := instance.Method(parts[1])
-		if err != nil {
-			return nil, fmt.Errorf("looking up method %s: %w", parts[1], err)
-		}
+	m, err := instance.Method(method)
+	if err != nil {
+		return nil, fmt.Errorf("looking up method %s: %w", method, err)
+	}
 
-		result, err = method.Remote(ctx, []any{audioData}, map[string]any{
-			"diarize": diarize,
-		})
-		if err != nil {
-			return nil, fmt.Errorf("calling modal method: %w", err)
-		}
-	} else {
-		fn, err := client.Functions.FromName(ctx, cfg.AppName, cfg.FunctionName, nil)
-		if err != nil {
-			return nil, fmt.Errorf("looking up modal function %s/%s: %w", cfg.AppName, cfg.FunctionName, err)
-		}
-
-		result, err = fn.Remote(ctx, []any{audioData}, map[string]any{
-			"diarize": diarize,
-		})
-		if err != nil {
-			return nil, fmt.Errorf("calling modal function: %w", err)
-		}
+	result, err := m.Remote(ctx, []any{audioData}, map[string]any{
+		"diarize": diarize,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("calling modal function: %w", err)
 	}
 
 	// Modal's pickle-based protocol returns map[interface{}]interface{}.
