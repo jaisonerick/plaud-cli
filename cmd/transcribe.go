@@ -112,8 +112,7 @@ Examples:
 		// Set up progress tracker with client-side stages
 		tracker := progress.NewTracker(os.Stderr, []progress.StageDef{
 			{ID: "download", Label: "Downloading audio"},
-			{ID: "connect", Label: "Waiting for server"},
-			{ID: "upload", Label: "Uploading audio"},
+			{ID: "upload", Label: "Waiting for server"},
 		})
 
 		// Phase 1: Download audio
@@ -138,10 +137,11 @@ Examples:
 		}
 		tracker.Update(progress.Event{Stage: "download", Status: "done", Detail: fmt.Sprintf("%.1f MB", float64(len(audioData))/1e6)})
 
-		// Phase 2: Connect + upload + server streaming
-		tracker.Update(progress.Event{Stage: "connect", Status: "started"})
+		// Phase 2: Wait for server
+		// Covers upload, cold start, and initial server handshake.
+		// Ends when the first SSE event (init) arrives.
+		tracker.Update(progress.Event{Stage: "upload", Status: "started"})
 
-		sizeMB := fmt.Sprintf("%.1f MB", float64(len(audioData))/1e6)
 		events, errCh := httpClient.TranscribeStream(ctx, audioData, modal.TranscribeOpts{
 			Diarize:            diarize,
 			Polish:             polish,
@@ -150,27 +150,14 @@ Examples:
 			Language:           trLanguage,
 			ContextDoc:         contextDoc,
 			SpeakerRecognition: speakerRecognition,
-		}, modal.StreamCallbacks{
-			OnUploadStart: func() {
-				tracker.Update(progress.Event{Stage: "connect", Status: "done"})
-				tracker.Update(progress.Event{Stage: "upload", Status: "started", Detail: sizeMB})
-			},
-			OnUploadProgress: func(sent, total int64) {
-				pct := sent * 100 / total
-				tracker.Update(progress.Event{
-					Stage:  "upload",
-					Status: "progress",
-					Detail: fmt.Sprintf("%d%%  %s", pct, sizeMB),
-				})
-			},
-		})
+		}, modal.StreamCallbacks{})
 
 		var result *modal.TranscribeResult
 		for evt := range events {
 			switch evt.Type {
 			case "init":
-				// Upload is done — server received data and started processing
-				tracker.Update(progress.Event{Stage: "upload", Status: "done", Detail: sizeMB})
+				// First server event — server is ready
+				tracker.Update(progress.Event{Stage: "upload", Status: "done"})
 				// Insert server stages, then save
 				tracker.AddStages(evt.Stages)
 				tracker.AddStages([]progress.StageDef{{ID: "save", Label: "Saving transcript"}})
@@ -235,35 +222,27 @@ Examples:
 		tracker.Update(progress.Event{Stage: "save", Status: "done"})
 		tracker.Wait()
 
-		fmt.Printf("Transcript saved to %s\n", dest)
+		// Summary
+		fmt.Fprintf(os.Stderr, "\nSaved to %s\n", dest)
 
-		// Print audio ID and speaker mapping
-		if result.AudioID != "" {
-			fmt.Printf("Audio ID: %s\n", result.AudioID)
-		}
-		if len(result.Speakers) > 0 {
-			parts := make([]string, 0, len(result.Speakers))
-			for k, v := range result.Speakers {
-				parts = append(parts, fmt.Sprintf("%s → %s", k, v))
-			}
-			fmt.Printf("Speakers: %s\n", strings.Join(parts, ", "))
-		}
-
-		// Interactive speaker identification
-		if trIdentify {
+		// Speaker identification
+		if len(result.Speakers) > 0 && trIdentify {
 			unresolved := identify.UnresolvedSpeakers(result.Speakers)
+
+			// Show recognized speakers
+			var recognized []string
+			for k, v := range result.Speakers {
+				if k != v {
+					recognized = append(recognized, v)
+				}
+			}
+			if len(recognized) > 0 {
+				fmt.Fprintf(os.Stderr, "Recognized: %s\n", strings.Join(recognized, ", "))
+			}
+
 			if len(unresolved) > 0 {
-				var recognized []string
-				for k, v := range result.Speakers {
-					if k != v {
-						recognized = append(recognized, v)
-					}
-				}
-				if len(recognized) > 0 {
-					fmt.Fprintf(os.Stderr, "\nRecognized: %s\n", strings.Join(recognized, ", "))
-				}
-				fmt.Fprintf(os.Stderr, "%d unidentified speaker(s): %s\n", len(unresolved), strings.Join(unresolved, ", "))
-				fmt.Fprintf(os.Stderr, "\nOpen browser to identify speakers? [Y/n] ")
+				fmt.Fprintf(os.Stderr, "Unidentified: %s\n", strings.Join(unresolved, ", "))
+				fmt.Fprintf(os.Stderr, "\nOpen browser to identify? [Y/n] ")
 
 				reader := bufio.NewReader(os.Stdin)
 				line, _ := reader.ReadString('\n')
@@ -280,23 +259,37 @@ Examples:
 						return fmt.Errorf("speaker identification: %w", err)
 					}
 
-					var wg sync.WaitGroup
-					for speakerID, name := range idResult.Names {
-						wg.Add(1)
-						go func(sid, n string) {
-							defer wg.Done()
-							if err := httpClient.SetSpeakerName(ctx, result.AudioID, sid, n); err != nil {
-								fmt.Fprintf(os.Stderr, "Warning: failed to set name for %s: %v\n", sid, err)
-								return
-							}
-							fmt.Printf("Speaker %q registered from audio %s/%s\n", n, result.AudioID, sid)
-						}(speakerID, name)
+					if len(idResult.Names) > 0 {
+						fmt.Fprintf(os.Stderr, "\n")
+						var wg sync.WaitGroup
+						for speakerID, name := range idResult.Names {
+							wg.Add(1)
+							go func(sid, n string) {
+								defer wg.Done()
+								if err := httpClient.SetSpeakerName(ctx, result.AudioID, sid, n); err != nil {
+									fmt.Fprintf(os.Stderr, "  Warning: failed to register %s: %v\n", sid, err)
+									return
+								}
+								fmt.Fprintf(os.Stderr, "  Registered %q (%s)\n", n, sid)
+							}(speakerID, name)
+						}
+						wg.Wait()
 					}
-					wg.Wait()
 				}
 			} else {
-				fmt.Fprintf(os.Stderr, "All speakers identified.\n")
+				fmt.Fprintf(os.Stderr, "All speakers identified: %s\n", strings.Join(recognized, ", "))
 			}
+		} else if len(result.Speakers) > 0 {
+			// Not using --identify, just list speakers
+			var names []string
+			for k, v := range result.Speakers {
+				if k != v {
+					names = append(names, v)
+				} else {
+					names = append(names, k)
+				}
+			}
+			fmt.Fprintf(os.Stderr, "Speakers: %s\n", strings.Join(names, ", "))
 		}
 
 		return nil

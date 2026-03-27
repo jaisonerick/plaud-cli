@@ -30,11 +30,12 @@ type Event struct {
 // stageState uses atomic values to avoid holding a mutex in decorator callbacks
 // (which run under mpb's internal lock).
 type stageState struct {
-	bar       *mpb.Bar
-	detail    atomic.Value // stores string
-	started   atomic.Bool
-	done      atomic.Bool
-	startedAt atomic.Value // stores time.Time
+	bar          *mpb.Bar
+	detail       atomic.Value // stores string
+	started      atomic.Bool
+	done         atomic.Bool
+	startedAt    atomic.Value // stores time.Time
+	finalElapsed atomic.Value // stores string — frozen elapsed on done
 }
 
 func (s *stageState) getDetail() string {
@@ -46,13 +47,23 @@ func (s *stageState) getDetail() string {
 }
 
 func (s *stageState) getElapsed() string {
+	// If done, return the frozen elapsed time
+	if v := s.finalElapsed.Load(); v != nil {
+		return v.(string)
+	}
 	v := s.startedAt.Load()
 	if v == nil {
 		return ""
 	}
-	d := time.Since(v.(time.Time))
+	return formatElapsed(time.Since(v.(time.Time)))
+}
+
+func formatElapsed(d time.Duration) string {
+	if d < 10*time.Second {
+		return fmt.Sprintf("%.1fs", d.Seconds())
+	}
 	if d < time.Minute {
-		return fmt.Sprintf("%ds", int(d.Seconds()))
+		return fmt.Sprintf("%.0fs", d.Seconds())
 	}
 	return fmt.Sprintf("%dm%02ds", int(d.Minutes()), int(d.Seconds())%60)
 }
@@ -129,10 +140,6 @@ func (t *Tracker) addBar(def StageDef) {
 					return "skipped"
 				}
 				detail := st.getDetail()
-				if statistics.Completed || st.done.Load() {
-					return detail
-				}
-				// While active: show detail + elapsed time
 				elapsed := st.getElapsed()
 				if detail != "" && elapsed != "" {
 					return detail + "  " + elapsed
@@ -190,6 +197,10 @@ func (t *Tracker) Update(evt Event) {
 	case "done":
 		if evt.Detail != "" {
 			st.detail.Store(evt.Detail)
+		}
+		// Freeze elapsed time at completion
+		if v := st.startedAt.Load(); v != nil {
+			st.finalElapsed.Store(formatElapsed(time.Since(v.(time.Time))))
 		}
 		st.done.Store(true)
 		if st.bar.Current() == 0 {

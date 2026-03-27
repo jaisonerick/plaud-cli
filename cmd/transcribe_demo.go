@@ -17,8 +17,7 @@ var transcribeDemoCmd = &cobra.Command{
 		// Client-side stages
 		tracker := progress.NewTracker(os.Stderr, []progress.StageDef{
 			{ID: "download", Label: "Downloading audio"},
-			{ID: "connect", Label: "Waiting for server"},
-			{ID: "upload", Label: "Uploading audio"},
+			{ID: "upload", Label: "Waiting for server"},
 		})
 
 		// 1. Download audio — simulate bytes arriving
@@ -41,25 +40,12 @@ var transcribeDemoCmd = &cobra.Command{
 		}
 		tracker.Update(progress.Event{Stage: "download", Status: "done", Detail: "2.4 MB"})
 
-		// 2. Connect — simulate cold start
-		tracker.Update(progress.Event{Stage: "connect", Status: "started"})
-		time.Sleep(2 * time.Second)
-		tracker.Update(progress.Event{Stage: "connect", Status: "done"})
+		// 2. Wait for server — covers upload + cold start + handshake
+		tracker.Update(progress.Event{Stage: "upload", Status: "started"})
+		time.Sleep(3 * time.Second)
+		tracker.Update(progress.Event{Stage: "upload", Status: "done"})
 
-		// 3. Upload — simulate upload progress
-		tracker.Update(progress.Event{Stage: "upload", Status: "started", Detail: "2.4 MB"})
-		for i := 1; i <= 10; i++ {
-			time.Sleep(80 * time.Millisecond)
-			pct := i * 10
-			tracker.Update(progress.Event{
-				Stage:  "upload",
-				Status: "progress",
-				Detail: fmt.Sprintf("%d%%  2.4 MB", pct),
-			})
-		}
-		tracker.Update(progress.Event{Stage: "upload", Status: "done", Detail: "2.4 MB"})
-
-		// 4. Server init — add server stages dynamically
+		// 3. Server init — add server stages dynamically
 		tracker.AddStages([]progress.StageDef{
 			{ID: "context", Label: "Extracting context"},
 			{ID: "transcribe", Label: "Transcribing audio"},
