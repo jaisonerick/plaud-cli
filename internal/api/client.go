@@ -114,9 +114,10 @@ func (c *Client) PostForm(ctx context.Context, path string, values url.Values, r
 	return c.do(ctx, req, result)
 }
 
-// DownloadFile fetches a URL and writes it to disk.
 // FetchFile downloads a URL and returns the raw bytes.
-func (c *Client) FetchFile(ctx context.Context, fileURL string) ([]byte, error) {
+// If onProgress is non-nil, it is called with (bytesReceived, totalBytes)
+// as data arrives. totalBytes is -1 if Content-Length is unknown.
+func (c *Client) FetchFile(ctx context.Context, fileURL string, onProgress func(received, total int64)) ([]byte, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, fileURL, nil)
 	if err != nil {
 		return nil, fmt.Errorf("creating download request: %w", err)
@@ -132,12 +133,38 @@ func (c *Client) FetchFile(ctx context.Context, fileURL string) ([]byte, error) 
 		return nil, fmt.Errorf("download returned status %d", resp.StatusCode)
 	}
 
-	data, err := io.ReadAll(resp.Body)
+	var reader io.Reader = resp.Body
+	if onProgress != nil {
+		reader = &progressReader{
+			r:          resp.Body,
+			total:      resp.ContentLength,
+			onProgress: onProgress,
+		}
+	}
+
+	data, err := io.ReadAll(reader)
 	if err != nil {
 		return nil, fmt.Errorf("reading response: %w", err)
 	}
 
 	return data, nil
+}
+
+// progressReader wraps an io.Reader and reports progress.
+type progressReader struct {
+	r          io.Reader
+	total      int64
+	received   int64
+	onProgress func(received, total int64)
+}
+
+func (pr *progressReader) Read(p []byte) (int, error) {
+	n, err := pr.r.Read(p)
+	pr.received += int64(n)
+	if n > 0 {
+		pr.onProgress(pr.received, pr.total)
+	}
+	return n, err
 }
 
 func (c *Client) DownloadFile(ctx context.Context, fileURL, destPath string) error {

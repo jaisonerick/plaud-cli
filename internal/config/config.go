@@ -14,11 +14,12 @@ const configFile = "token.json"
 
 // Config holds the persisted authentication state.
 type Config struct {
-	AccessToken    string `json:"access_token"`
-	BaseURL        string `json:"base_url"`
-	DeviceID       string `json:"device_id"`
-	ModalTokenID   string `json:"modal_token_id,omitempty"`
+	AccessToken      string `json:"access_token"`
+	BaseURL          string `json:"base_url"`
+	DeviceID         string `json:"device_id"`
+	ModalTokenID     string `json:"modal_token_id,omitempty"`
 	ModalTokenSecret string `json:"modal_token_secret,omitempty"`
+	ModalEndpointURL string `json:"modal_endpoint_url,omitempty"`
 }
 
 func configPath() (string, error) {

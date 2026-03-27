@@ -27,12 +27,12 @@ Example:
 		speakerID := args[1]
 		name := args[2]
 
-		modalCfg := modal.LoadConfig(cfg.ModalTokenID, cfg.ModalTokenSecret)
-		if modalCfg == nil {
-			return fmt.Errorf("Modal not configured. Run 'plaud modal-auth' or set MODAL_TOKEN_ID and MODAL_TOKEN_SECRET environment variables")
+		httpClient := modal.LoadHTTPClient(cfg.ModalTokenID, cfg.ModalTokenSecret, cfg.ModalEndpointURL)
+		if httpClient == nil {
+			return fmt.Errorf("Modal not configured. Run 'plaud modal-auth' or set MODAL_TOKEN_ID, MODAL_TOKEN_SECRET, and MODAL_ENDPOINT_URL environment variables")
 		}
 
-		if err := modal.SetSpeakerName(ctx, modalCfg, audioID, speakerID, name); err != nil {
+		if err := httpClient.SetSpeakerName(ctx, audioID, speakerID, name); err != nil {
 			return fmt.Errorf("setting speaker name: %w", err)
 		}
 
@@ -48,12 +48,12 @@ var speakerListCmd = &cobra.Command{
 	RunE: func(cmd *cobra.Command, args []string) error {
 		ctx := cmd.Context()
 
-		modalCfg := modal.LoadConfig(cfg.ModalTokenID, cfg.ModalTokenSecret)
-		if modalCfg == nil {
-			return fmt.Errorf("Modal not configured. Run 'plaud modal-auth' or set MODAL_TOKEN_ID and MODAL_TOKEN_SECRET environment variables")
+		httpClient := modal.LoadHTTPClient(cfg.ModalTokenID, cfg.ModalTokenSecret, cfg.ModalEndpointURL)
+		if httpClient == nil {
+			return fmt.Errorf("Modal not configured. Run 'plaud modal-auth' or set MODAL_TOKEN_ID, MODAL_TOKEN_SECRET, and MODAL_ENDPOINT_URL environment variables")
 		}
 
-		speakers, err := modal.ListKnownSpeakers(ctx, modalCfg)
+		speakers, err := httpClient.ListKnownSpeakers(ctx)
 		if err != nil {
 			return fmt.Errorf("listing speakers: %w", err)
 		}

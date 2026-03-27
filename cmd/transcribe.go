@@ -12,18 +12,19 @@ import (
 	"github.com/jaisonerick/plaud-cli/internal/api"
 	"github.com/jaisonerick/plaud-cli/internal/identify"
 	"github.com/jaisonerick/plaud-cli/internal/modal"
+	"github.com/jaisonerick/plaud-cli/internal/progress"
 	"github.com/jaisonerick/plaud-cli/internal/transcript"
 	"github.com/spf13/cobra"
 )
 
 var (
-	trOutputDir          string
-	trFormat             string
-	trOptions            string
-	trContext            string
-	trCompactGap         int
-	trLanguage           string
-	trIdentify bool
+	trOutputDir  string
+	trFormat     string
+	trOptions    string
+	trContext    string
+	trCompactGap int
+	trLanguage   string
+	trIdentify   bool
 )
 
 var transcribeCmd = &cobra.Command{
@@ -32,9 +33,7 @@ var transcribeCmd = &cobra.Command{
 	Long: `Download a recording's audio and transcribe it using a Whisper model
 deployed on Modal. By default enables diarization, polishing, and compaction.
 
-Requires environment variables:
-  MODAL_TOKEN_ID       Modal authentication token ID
-  MODAL_TOKEN_SECRET   Modal authentication token secret
+Requires Modal credentials configured via 'plaud modal-auth'.
 
 Examples:
   plaud transcribe abc123
@@ -51,10 +50,10 @@ Examples:
 		ctx := cmd.Context()
 		id := args[0]
 
-		// Check Modal configuration (env vars take priority, then saved config)
-		modalCfg := modal.LoadConfig(cfg.ModalTokenID, cfg.ModalTokenSecret)
-		if modalCfg == nil {
-			return fmt.Errorf("Modal not configured. Run 'plaud modal-auth' or set MODAL_TOKEN_ID and MODAL_TOKEN_SECRET environment variables")
+		// Check Modal configuration
+		httpClient := modal.LoadHTTPClient(cfg.ModalTokenID, cfg.ModalTokenSecret, cfg.ModalEndpointURL)
+		if httpClient == nil {
+			return fmt.Errorf("Modal not configured. Run 'plaud modal-auth' or set MODAL_TOKEN_ID, MODAL_TOKEN_SECRET, and MODAL_ENDPOINT_URL environment variables")
 		}
 
 		// Validate format
@@ -78,19 +77,6 @@ Examples:
 
 		baseName := transcript.SanitizeFilename(detail.Name) + "_" + strings.ReplaceAll(api.FormatEpochMs(detail.StartTime), " ", "_")
 
-		// Download audio
-		fmt.Fprint(os.Stderr, "Downloading audio... ")
-		tempURL, err := client.GetTempURL(ctx, id)
-		if err != nil {
-			return fmt.Errorf("getting download URL: %w", err)
-		}
-
-		audioData, err := client.FetchFile(ctx, tempURL)
-		if err != nil {
-			return fmt.Errorf("downloading audio: %w", err)
-		}
-		fmt.Fprintf(os.Stderr, "done (%d bytes)\n", len(audioData))
-
 		// Parse options
 		diarize, polish, compact, speakerRecognition := true, true, true, true
 		if trOptions != "" {
@@ -109,7 +95,6 @@ Examples:
 				}
 			}
 		}
-		// compact requires diarize
 		if !diarize {
 			compact = false
 		}
@@ -124,20 +109,40 @@ Examples:
 			contextDoc = string(data)
 		}
 
-		// Transcribe via Modal
-		fmt.Fprint(os.Stderr, "Transcribing")
-		if diarize {
-			fmt.Fprint(os.Stderr, " with speaker diarization")
-		}
-		if polish {
-			fmt.Fprint(os.Stderr, " + polish")
-		}
-		if compact {
-			fmt.Fprint(os.Stderr, " + compact")
-		}
-		fmt.Fprint(os.Stderr, "... ")
+		// Set up progress tracker with client-side stages
+		tracker := progress.NewTracker(os.Stderr, []progress.StageDef{
+			{ID: "download", Label: "Downloading audio"},
+			{ID: "connect", Label: "Waiting for server"},
+			{ID: "upload", Label: "Uploading audio"},
+		})
 
-		result, err := modal.Transcribe(ctx, modalCfg, audioData, modal.TranscribeOpts{
+		// Phase 1: Download audio
+		tracker.Update(progress.Event{Stage: "download", Status: "started"})
+		tempURL, err := client.GetTempURL(ctx, id)
+		if err != nil {
+			return fmt.Errorf("getting download URL: %w", err)
+		}
+
+		audioData, err := client.FetchFile(ctx, tempURL, func(received, total int64) {
+			if total > 0 {
+				pct := received * 100 / total
+				tracker.Update(progress.Event{
+					Stage:  "download",
+					Status: "progress",
+					Detail: fmt.Sprintf("%d%%  %.1f MB", pct, float64(received)/1e6),
+				})
+			}
+		})
+		if err != nil {
+			return fmt.Errorf("downloading audio: %w", err)
+		}
+		tracker.Update(progress.Event{Stage: "download", Status: "done", Detail: fmt.Sprintf("%.1f MB", float64(len(audioData))/1e6)})
+
+		// Phase 2: Connect + upload + server streaming
+		tracker.Update(progress.Event{Stage: "connect", Status: "started"})
+
+		sizeMB := fmt.Sprintf("%.1f MB", float64(len(audioData))/1e6)
+		events, errCh := httpClient.TranscribeStream(ctx, audioData, modal.TranscribeOpts{
 			Diarize:            diarize,
 			Polish:             polish,
 			Compact:            compact,
@@ -145,13 +150,70 @@ Examples:
 			Language:           trLanguage,
 			ContextDoc:         contextDoc,
 			SpeakerRecognition: speakerRecognition,
+		}, modal.StreamCallbacks{
+			OnUploadStart: func() {
+				tracker.Update(progress.Event{Stage: "connect", Status: "done"})
+				tracker.Update(progress.Event{Stage: "upload", Status: "started", Detail: sizeMB})
+			},
+			OnUploadProgress: func(sent, total int64) {
+				pct := sent * 100 / total
+				tracker.Update(progress.Event{
+					Stage:  "upload",
+					Status: "progress",
+					Detail: fmt.Sprintf("%d%%  %s", pct, sizeMB),
+				})
+			},
 		})
-		if err != nil {
-			return fmt.Errorf("transcribing: %w", err)
-		}
-		fmt.Fprintf(os.Stderr, "done (%d segments)\n", len(result.Segments))
 
-		// Save result
+		var result *modal.TranscribeResult
+		for evt := range events {
+			switch evt.Type {
+			case "init":
+				// Upload is done — server received data and started processing
+				tracker.Update(progress.Event{Stage: "upload", Status: "done", Detail: sizeMB})
+				// Insert server stages, then save
+				tracker.AddStages(evt.Stages)
+				tracker.AddStages([]progress.StageDef{{ID: "save", Label: "Saving transcript"}})
+
+			case "update":
+				e := progress.Event{
+					Stage:  evt.Stage,
+					Status: evt.Status,
+				}
+				if evt.Detail != nil {
+					e.Detail = *evt.Detail
+				}
+				if evt.Progress != nil {
+					e.Current = evt.Progress.Current
+					e.Total = evt.Progress.Total
+				}
+				tracker.Update(e)
+
+			case "result":
+				result = &modal.TranscribeResult{
+					AudioID:  evt.AudioID,
+					Segments: evt.Segments,
+					Speakers: evt.Speakers,
+				}
+
+			case "error":
+				tracker.Wait()
+				return fmt.Errorf("transcription failed at %s: %s", evt.Stage, evt.Message)
+			}
+		}
+		if err := <-errCh; err != nil {
+			tracker.Wait()
+			return fmt.Errorf("stream error: %w", err)
+		}
+
+		if result == nil {
+			tracker.Wait()
+			return fmt.Errorf("no result received from server")
+		}
+
+		// Phase 3: Save result
+		tracker.Update(progress.Event{Stage: "save", Status: "started"})
+
 		var dest string
 		if trFormat == "json" {
 			dest = filepath.Join(trOutputDir, baseName+"_whisper.json")
@@ -169,6 +231,9 @@ Examples:
 				return fmt.Errorf("writing transcript: %w", err)
 			}
 		}
+
+		tracker.Update(progress.Event{Stage: "save", Status: "done"})
+		tracker.Wait()
 
 		fmt.Printf("Transcript saved to %s\n", dest)
 
@@ -220,7 +285,7 @@ Examples:
 						wg.Add(1)
 						go func(sid, n string) {
 							defer wg.Done()
-							if err := modal.SetSpeakerName(ctx, modalCfg, result.AudioID, sid, n); err != nil {
+							if err := httpClient.SetSpeakerName(ctx, result.AudioID, sid, n); err != nil {
 								fmt.Fprintf(os.Stderr, "Warning: failed to set name for %s: %v\n", sid, err)
 								return
 							}
