@@ -3,6 +3,7 @@ import os
 from .compact import Compactor
 from .context import ContextExtractor
 from .diarize import Diarizer
+from .llm import LLMClient
 from .polish import Polisher
 from .segments import SegmentConverter
 from .transcribe import Transcriber
@@ -14,7 +15,13 @@ class WhisperTranscriptionBuilder:
     Configure the pipeline, then call transcribe() to execute all steps.
 
     Usage:
-        builder = WhisperTranscriptionBuilder(device="cuda", compute_type="float16", model_name="large-v3")
+        builder = WhisperTranscriptionBuilder(
+            device="cuda",
+            compute_type="float16",
+            model_name="large-v3",
+            llm_model="openrouter/anthropic/claude-sonnet-4",
+            llm_api_key="sk-...",
+        )
         builder.load()
 
         segments = (
@@ -27,11 +34,22 @@ class WhisperTranscriptionBuilder:
         )
     """
 
-    def __init__(self, device: str, compute_type: str, model_name: str):
+    def __init__(
+        self,
+        device: str,
+        compute_type: str,
+        model_name: str,
+        llm_model: str,
+        llm_api_key: str,
+        llm_max_workers: int = 12,
+    ):
         self.device = device
-        self.compute_type = compute_type
-        self.model_name = model_name
         self._transcriber = Transcriber(device, compute_type, model_name)
+        self._llm = LLMClient(
+            model=llm_model,
+            api_key=llm_api_key,
+            max_workers=llm_max_workers,
+        )
         self._reset()
 
     def _reset(self):
@@ -49,7 +67,7 @@ class WhisperTranscriptionBuilder:
 
     def with_context(self, context_doc: str) -> "WhisperTranscriptionBuilder":
         """Extract hotwords and context summary from a document."""
-        ctx = ContextExtractor(context_doc).run()
+        ctx = ContextExtractor(self._llm, context_doc).run()
         self._context_summary = ctx.context_summary
         self._hotwords = ctx.hotwords
         return self
@@ -88,7 +106,7 @@ class WhisperTranscriptionBuilder:
         segments = SegmentConverter(diarized).run(result)
 
         if self._do_polish:
-            segments = Polisher(self._context_summary).run(segments)
+            segments = Polisher(self._llm, self._context_summary).run(segments)
 
         if self._do_compact and diarized:
             segments = Compactor(self._compact_gap).run(segments)
