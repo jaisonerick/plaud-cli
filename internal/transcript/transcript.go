@@ -93,6 +93,42 @@ func Search(segments []Segment, query string) []Match {
 	return matches
 }
 
+// Format converts parsed segments to the specified format (txt, srt, md).
+// Returns the file extension and formatted content.
+func Format(segments []Segment, format string) (string, string) {
+	switch format {
+	case "txt":
+		return ".txt", ToText(segments)
+	case "srt":
+		return ".srt", ToSRT(segments)
+	case "md":
+		return ".md", ToMarkdown(segments)
+	default:
+		return ".txt", ToText(segments)
+	}
+}
+
+// SanitizeFilename replaces characters that are invalid in filenames.
+func SanitizeFilename(name string) string {
+	replacer := strings.NewReplacer(
+		"/", "_",
+		"\\", "_",
+		":", "_",
+		"*", "_",
+		"?", "_",
+		"\"", "_",
+		"<", "_",
+		">", "_",
+		"|", "_",
+	)
+	s := replacer.Replace(name)
+	s = strings.TrimSpace(s)
+	if s == "" {
+		s = "recording"
+	}
+	return s
+}
+
 // formatSRTTime formats milliseconds as HH:MM:SS,mmm for SRT format.
 func formatSRTTime(ms int64) string {
 	h := ms / 3600000

@@ -9,6 +9,7 @@ import (
 
 	"github.com/jaisonerick/plaud-cli/internal/api"
 	"github.com/jaisonerick/plaud-cli/internal/modal"
+	"github.com/jaisonerick/plaud-cli/internal/transcript"
 	"github.com/spf13/cobra"
 )
 
@@ -63,7 +64,7 @@ Examples:
 			return fmt.Errorf("fetching recording details: %w", err)
 		}
 
-		baseName := sanitizeFilename(detail.Name) + "_" + strings.ReplaceAll(api.FormatEpochMs(detail.StartTime), " ", "_")
+		baseName := transcript.SanitizeFilename(detail.Name) + "_" + strings.ReplaceAll(api.FormatEpochMs(detail.StartTime), " ", "_")
 
 		// Download audio
 		fmt.Fprint(os.Stderr, "Downloading audio... ")
@@ -103,7 +104,7 @@ Examples:
 				return fmt.Errorf("writing transcript: %w", err)
 			}
 		} else {
-			ext, content := formatTranscript(segments, trFormat)
+			ext, content := transcript.Format(segments, trFormat)
 			dest = filepath.Join(trOutputDir, baseName+"_whisper"+ext)
 			if err := os.WriteFile(dest, []byte(content), 0644); err != nil {
 				return fmt.Errorf("writing transcript: %w", err)

@@ -90,7 +90,7 @@ Examples:
 			}
 
 			// Create recording directory
-			dirName := sanitizeFilename(r.Name) + "_" + strings.ReplaceAll(api.FormatEpochMs(r.StartTime), " ", "_")
+			dirName := transcript.SanitizeFilename(r.Name) + "_" + strings.ReplaceAll(api.FormatEpochMs(r.StartTime), " ", "_")
 			recDir := filepath.Join(syncDir, dirName)
 			if err := os.MkdirAll(recDir, 0755); err != nil {
 				fmt.Fprintf(os.Stderr, "Error creating directory for %s: %v\n", r.Name, err)
@@ -144,7 +144,7 @@ Examples:
 								fmt.Fprintf(os.Stderr, "error parsing: %v\n", err)
 								hasError = true
 							} else {
-								ext, content := formatTranscript(segments, syncFormat)
+								ext, content := transcript.Format(segments, syncFormat)
 								dest := filepath.Join(recDir, "transcript"+ext)
 								if err := os.WriteFile(dest, []byte(content), 0644); err != nil {
 									fmt.Fprintf(os.Stderr, "error writing: %v\n", err)

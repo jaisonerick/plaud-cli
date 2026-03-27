@@ -68,7 +68,7 @@ Examples:
 			return fmt.Errorf("fetching recording details: %w", err)
 		}
 
-		baseName := sanitizeFilename(detail.Name) + "_" + strings.ReplaceAll(api.FormatEpochMs(detail.StartTime), " ", "_")
+		baseName := transcript.SanitizeFilename(detail.Name) + "_" + strings.ReplaceAll(api.FormatEpochMs(detail.StartTime), " ", "_")
 
 		if dlAudio {
 			fmt.Print("Downloading audio... ")
@@ -109,7 +109,7 @@ Examples:
 					return fmt.Errorf("parsing transcript: %w", err)
 				}
 
-				ext, content := formatTranscript(segments, dlFormat)
+				ext, content := transcript.Format(segments, dlFormat)
 				dest := filepath.Join(dlOutputDir, baseName+"_transcript"+ext)
 				if err := os.WriteFile(dest, []byte(content), 0644); err != nil {
 					return fmt.Errorf("writing transcript: %w", err)
@@ -136,40 +136,6 @@ Examples:
 	},
 }
 
-// formatTranscript converts parsed segments to the specified format.
-// Returns the file extension and formatted content.
-func formatTranscript(segments []transcript.Segment, format string) (string, string) {
-	switch format {
-	case "txt":
-		return ".txt", transcript.ToText(segments)
-	case "srt":
-		return ".srt", transcript.ToSRT(segments)
-	case "md":
-		return ".md", transcript.ToMarkdown(segments)
-	default:
-		return ".txt", transcript.ToText(segments)
-	}
-}
-
-func sanitizeFilename(name string) string {
-	replacer := strings.NewReplacer(
-		"/", "_",
-		"\\", "_",
-		":", "_",
-		"*", "_",
-		"?", "_",
-		"\"", "_",
-		"<", "_",
-		">", "_",
-		"|", "_",
-	)
-	s := replacer.Replace(name)
-	s = strings.TrimSpace(s)
-	if s == "" {
-		s = "recording"
-	}
-	return s
-}
 
 func init() {
 	downloadCmd.Flags().BoolVar(&dlAudio, "audio", false, "download audio file")
