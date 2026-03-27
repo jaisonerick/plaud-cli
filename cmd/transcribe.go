@@ -14,16 +14,19 @@ import (
 )
 
 var (
-	trOutputDir string
-	trFormat    string
-	trDiarize   bool
+	trOutputDir  string
+	trFormat     string
+	trOptions    string
+	trContext    string
+	trCompactGap int
+	trLanguage string
 )
 
 var transcribeCmd = &cobra.Command{
 	Use:   "transcribe <id>",
 	Short: "Transcribe a recording using Whisper via Modal",
 	Long: `Download a recording's audio and transcribe it using a Whisper model
-deployed on Modal. Supports speaker diarization.
+deployed on Modal. By default enables diarization, polishing, and compaction.
 
 Requires environment variables:
   MODAL_TOKEN_ID       Modal authentication token ID
@@ -31,9 +34,12 @@ Requires environment variables:
 
 Examples:
   plaud transcribe abc123
-  plaud transcribe abc123 --diarize
-  plaud transcribe abc123 --format srt --output-dir ./transcripts
-  plaud transcribe abc123 --diarize --format md`,
+  plaud transcribe abc123 --context ./meeting-prep.md
+  plaud transcribe abc123 --options no-polish
+  plaud transcribe abc123 --options no-polish,no-compact
+  plaud transcribe abc123 --options no-diarize,no-polish,no-compact
+  plaud transcribe abc123 --compact-gap 3000 --context ./prep.md
+  plaud transcribe abc123 --format srt --output-dir ./transcripts`,
 	Args: cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		ctx := cmd.Context()
@@ -79,14 +85,58 @@ Examples:
 		}
 		fmt.Fprintf(os.Stderr, "done (%d bytes)\n", len(audioData))
 
+		// Parse options
+		diarize, polish, compact := true, true, true
+		if trOptions != "" {
+			for _, opt := range strings.Split(trOptions, ",") {
+				switch strings.TrimSpace(opt) {
+				case "no-diarize":
+					diarize = false
+				case "no-polish":
+					polish = false
+				case "no-compact":
+					compact = false
+				default:
+					return fmt.Errorf("unknown option %q (valid: no-diarize, no-polish, no-compact)", opt)
+				}
+			}
+		}
+		// compact requires diarize
+		if !diarize {
+			compact = false
+		}
+
+		// Read context file if provided
+		var contextDoc string
+		if trContext != "" {
+			data, err := os.ReadFile(trContext)
+			if err != nil {
+				return fmt.Errorf("reading context file: %w", err)
+			}
+			contextDoc = string(data)
+		}
+
 		// Transcribe via Modal
 		fmt.Fprint(os.Stderr, "Transcribing")
-		if trDiarize {
+		if diarize {
 			fmt.Fprint(os.Stderr, " with speaker diarization")
+		}
+		if polish {
+			fmt.Fprint(os.Stderr, " + polish")
+		}
+		if compact {
+			fmt.Fprint(os.Stderr, " + compact")
 		}
 		fmt.Fprint(os.Stderr, "... ")
 
-		segments, err := modal.Transcribe(ctx, modalCfg, audioData, trDiarize)
+		segments, err := modal.Transcribe(ctx, modalCfg, audioData, modal.TranscribeOpts{
+			Diarize:    diarize,
+			Polish:     polish,
+			Compact:    compact,
+			CompactGap: trCompactGap,
+			Language: trLanguage,
+			ContextDoc: contextDoc,
+		})
 		if err != nil {
 			return fmt.Errorf("transcribing: %w", err)
 		}
@@ -119,6 +169,9 @@ Examples:
 func init() {
 	transcribeCmd.Flags().StringVar(&trOutputDir, "output-dir", ".", "output directory")
 	transcribeCmd.Flags().StringVar(&trFormat, "format", "md", "output format: json, txt, srt, md")
-	transcribeCmd.Flags().BoolVar(&trDiarize, "diarize", false, "enable speaker diarization")
+	transcribeCmd.Flags().StringVar(&trOptions, "options", "", "comma-separated disable flags: no-diarize, no-polish, no-compact")
+	transcribeCmd.Flags().StringVar(&trContext, "context", "", "path to meeting context file (agenda, notes) for better hotwords and polishing")
+	transcribeCmd.Flags().IntVar(&trCompactGap, "compact-gap", 2000, "max silence gap in ms before starting a new paragraph")
+	transcribeCmd.Flags().StringVar(&trLanguage, "language", "", "force language code (e.g. pt, en), empty for auto-detect")
 	rootCmd.AddCommand(transcribeCmd)
 }

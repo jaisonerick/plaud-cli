@@ -30,7 +30,7 @@ git push --tags
 ## External Services
 
 - **Plaud API** (`api.plaud.ai`) — Recording data, transcripts, summaries
-- **Modal** (`modal-whisper` app) — Whisper transcription with speaker diarization. Source: `~/code/jaisonerick/modal-whisper`
+- **Modal** (`modal-whisper` app) — Whisper transcription with speaker diarization. Source: `~/code/jaisonerick/modal-whisper`. Diarization uses WhisperX's `DiarizationPipeline` (from `whisperx.diarize`), not raw pyannote.
 - **Anthropic Claude** — AI summaries and Q&A (`ANTHROPIC_API_KEY`)
 
 ## Segment Contract

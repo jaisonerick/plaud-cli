@@ -46,9 +46,19 @@ func LoadConfig(savedTokenID, savedTokenSecret string) *Config {
 	}
 }
 
+// TranscribeOpts holds optional parameters for the Whisper transcription.
+type TranscribeOpts struct {
+	Diarize    bool
+	Polish     bool
+	Compact    bool
+	CompactGap int    // Max silence gap in ms before starting a new paragraph
+	Language   string // Force language code (e.g. "pt"), empty for auto-detect
+	ContextDoc string // Meeting context document contents
+}
+
 // Transcribe sends audio data to a Modal-deployed Whisper function and returns
-// transcript segments. The diarize flag requests speaker separation.
-func Transcribe(ctx context.Context, cfg *Config, audioData []byte, diarize bool) ([]transcript.Segment, error) {
+// transcript segments.
+func Transcribe(ctx context.Context, cfg *Config, audioData []byte, opts TranscribeOpts) ([]transcript.Segment, error) {
 	client, err := modalclient.NewClientWithOptions(&modalclient.ClientParams{
 		TokenID:     cfg.TokenID,
 		TokenSecret: cfg.TokenSecret,
@@ -73,9 +83,20 @@ func Transcribe(ctx context.Context, cfg *Config, audioData []byte, diarize bool
 		return nil, fmt.Errorf("looking up method %s: %w", method, err)
 	}
 
-	result, err := m.Remote(ctx, []any{audioData}, map[string]any{
-		"diarize": diarize,
-	})
+	kwargs := map[string]any{
+		"diarize":     opts.Diarize,
+		"polish":      opts.Polish,
+		"compact":     opts.Compact,
+		"compact_gap": opts.CompactGap,
+	}
+	if opts.Language != "" {
+		kwargs["language"] = opts.Language
+	}
+	if opts.ContextDoc != "" {
+		kwargs["context_doc"] = opts.ContextDoc
+	}
+
+	result, err := m.Remote(ctx, []any{audioData}, kwargs)
 	if err != nil {
 		return nil, fmt.Errorf("calling modal function: %w", err)
 	}
