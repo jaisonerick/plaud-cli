@@ -38,10 +38,10 @@ Examples:
 		ctx := cmd.Context()
 		id := args[0]
 
-		// Check Modal configuration
-		modalCfg := modal.LoadConfig()
+		// Check Modal configuration (env vars take priority, then saved config)
+		modalCfg := modal.LoadConfig(cfg.ModalTokenID, cfg.ModalTokenSecret)
 		if modalCfg == nil {
-			return fmt.Errorf("Modal not configured. Set MODAL_TOKEN_ID and MODAL_TOKEN_SECRET environment variables")
+			return fmt.Errorf("Modal not configured. Run 'plaud modal-auth' or set MODAL_TOKEN_ID and MODAL_TOKEN_SECRET environment variables")
 		}
 
 		// Validate format

@@ -23,11 +23,18 @@ type Config struct {
 	TokenSecret string
 }
 
-// LoadConfig reads Modal configuration from environment variables.
-// Returns nil if the required variables are not set.
-func LoadConfig() *Config {
+// LoadConfig reads Modal credentials from environment variables, falling back
+// to the saved config. Returns nil if neither source has credentials.
+func LoadConfig(savedTokenID, savedTokenSecret string) *Config {
 	tokenID := os.Getenv("MODAL_TOKEN_ID")
 	tokenSecret := os.Getenv("MODAL_TOKEN_SECRET")
+
+	if tokenID == "" {
+		tokenID = savedTokenID
+	}
+	if tokenSecret == "" {
+		tokenSecret = savedTokenSecret
+	}
 
 	if tokenID == "" || tokenSecret == "" {
 		return nil
