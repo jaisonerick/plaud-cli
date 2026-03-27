@@ -15,8 +15,15 @@ builds:
       - -s -w -X github.com/jaisonerick/plaud-cli/cmd.Version={{ .Version }}
 
 archives:
-  - format: binary
+  - id: binary
+    format: binary
     name_template: "plaud-cli_{{ .Os }}_{{ .Arch }}"
+  - id: tarball
+    format: tar.gz
+    name_template: "plaud-cli_{{ .Os }}_{{ .Arch }}"
+    format_overrides:
+      - goos: windows
+        format: zip
 
 checksum:
   name_template: "checksums.txt"
