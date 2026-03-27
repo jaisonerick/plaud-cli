@@ -1,25 +1,29 @@
 package cmd
 
 import (
+	"bufio"
 	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 
 	"github.com/jaisonerick/plaud-cli/internal/api"
+	"github.com/jaisonerick/plaud-cli/internal/identify"
 	"github.com/jaisonerick/plaud-cli/internal/modal"
 	"github.com/jaisonerick/plaud-cli/internal/transcript"
 	"github.com/spf13/cobra"
 )
 
 var (
-	trOutputDir  string
-	trFormat     string
-	trOptions    string
-	trContext    string
-	trCompactGap int
-	trLanguage string
+	trOutputDir          string
+	trFormat             string
+	trOptions            string
+	trContext            string
+	trCompactGap         int
+	trLanguage           string
+	trIdentify bool
 )
 
 var transcribeCmd = &cobra.Command{
@@ -39,6 +43,8 @@ Examples:
   plaud transcribe abc123 --options no-polish,no-compact
   plaud transcribe abc123 --options no-diarize,no-polish,no-compact
   plaud transcribe abc123 --compact-gap 3000 --context ./prep.md
+  plaud transcribe abc123 --identify
+  plaud transcribe abc123 --options no-speaker-recognition
   plaud transcribe abc123 --format srt --output-dir ./transcripts`,
 	Args: cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
@@ -86,7 +92,7 @@ Examples:
 		fmt.Fprintf(os.Stderr, "done (%d bytes)\n", len(audioData))
 
 		// Parse options
-		diarize, polish, compact := true, true, true
+		diarize, polish, compact, speakerRecognition := true, true, true, true
 		if trOptions != "" {
 			for _, opt := range strings.Split(trOptions, ",") {
 				switch strings.TrimSpace(opt) {
@@ -96,8 +102,10 @@ Examples:
 					polish = false
 				case "no-compact":
 					compact = false
+				case "no-speaker-recognition":
+					speakerRecognition = false
 				default:
-					return fmt.Errorf("unknown option %q (valid: no-diarize, no-polish, no-compact)", opt)
+					return fmt.Errorf("unknown option %q (valid: no-diarize, no-polish, no-compact, no-speaker-recognition)", opt)
 				}
 			}
 		}
@@ -129,24 +137,25 @@ Examples:
 		}
 		fmt.Fprint(os.Stderr, "... ")
 
-		segments, err := modal.Transcribe(ctx, modalCfg, audioData, modal.TranscribeOpts{
-			Diarize:    diarize,
-			Polish:     polish,
-			Compact:    compact,
-			CompactGap: trCompactGap,
-			Language: trLanguage,
-			ContextDoc: contextDoc,
+		result, err := modal.Transcribe(ctx, modalCfg, audioData, modal.TranscribeOpts{
+			Diarize:            diarize,
+			Polish:             polish,
+			Compact:            compact,
+			CompactGap:         trCompactGap,
+			Language:           trLanguage,
+			ContextDoc:         contextDoc,
+			SpeakerRecognition: speakerRecognition,
 		})
 		if err != nil {
 			return fmt.Errorf("transcribing: %w", err)
 		}
-		fmt.Fprintf(os.Stderr, "done (%d segments)\n", len(segments))
+		fmt.Fprintf(os.Stderr, "done (%d segments)\n", len(result.Segments))
 
 		// Save result
 		var dest string
 		if trFormat == "json" {
 			dest = filepath.Join(trOutputDir, baseName+"_whisper.json")
-			data, err := json.MarshalIndent(segments, "", "  ")
+			data, err := json.MarshalIndent(result.Segments, "", "  ")
 			if err != nil {
 				return fmt.Errorf("marshaling transcript: %w", err)
 			}
@@ -154,7 +163,7 @@ Examples:
 				return fmt.Errorf("writing transcript: %w", err)
 			}
 		} else {
-			ext, content := transcript.Format(segments, trFormat)
+			ext, content := transcript.Format(result.Segments, trFormat)
 			dest = filepath.Join(trOutputDir, baseName+"_whisper"+ext)
 			if err := os.WriteFile(dest, []byte(content), 0644); err != nil {
 				return fmt.Errorf("writing transcript: %w", err)
@@ -162,6 +171,69 @@ Examples:
 		}
 
 		fmt.Printf("Transcript saved to %s\n", dest)
+
+		// Print audio ID and speaker mapping
+		if result.AudioID != "" {
+			fmt.Printf("Audio ID: %s\n", result.AudioID)
+		}
+		if len(result.Speakers) > 0 {
+			parts := make([]string, 0, len(result.Speakers))
+			for k, v := range result.Speakers {
+				parts = append(parts, fmt.Sprintf("%s → %s", k, v))
+			}
+			fmt.Printf("Speakers: %s\n", strings.Join(parts, ", "))
+		}
+
+		// Interactive speaker identification
+		if trIdentify {
+			unresolved := identify.UnresolvedSpeakers(result.Speakers)
+			if len(unresolved) > 0 {
+				var recognized []string
+				for k, v := range result.Speakers {
+					if k != v {
+						recognized = append(recognized, v)
+					}
+				}
+				if len(recognized) > 0 {
+					fmt.Fprintf(os.Stderr, "\nRecognized: %s\n", strings.Join(recognized, ", "))
+				}
+				fmt.Fprintf(os.Stderr, "%d unidentified speaker(s): %s\n", len(unresolved), strings.Join(unresolved, ", "))
+				fmt.Fprintf(os.Stderr, "\nOpen browser to identify speakers? [Y/n] ")
+
+				reader := bufio.NewReader(os.Stdin)
+				line, _ := reader.ReadString('\n')
+				line = strings.TrimSpace(strings.ToLower(line))
+
+				if line == "" || line == "y" || line == "yes" {
+					idResult, err := identify.RunServer(ctx, identify.Config{
+						AudioData: audioData,
+						AudioID:   result.AudioID,
+						Speakers:  result.Speakers,
+						Segments:  result.Segments,
+					})
+					if err != nil {
+						return fmt.Errorf("speaker identification: %w", err)
+					}
+
+					var wg sync.WaitGroup
+					for speakerID, name := range idResult.Names {
+						wg.Add(1)
+						go func(sid, n string) {
+							defer wg.Done()
+							if err := modal.SetSpeakerName(ctx, modalCfg, result.AudioID, sid, n); err != nil {
+								fmt.Fprintf(os.Stderr, "Warning: failed to set name for %s: %v\n", sid, err)
+								return
+							}
+							fmt.Printf("Speaker %q registered from audio %s/%s\n", n, result.AudioID, sid)
+						}(speakerID, name)
+					}
+					wg.Wait()
+				}
+			} else {
+				fmt.Fprintf(os.Stderr, "All speakers identified.\n")
+			}
+		}
+
 		return nil
 	},
 }
@@ -169,9 +241,10 @@ Examples:
 func init() {
 	transcribeCmd.Flags().StringVar(&trOutputDir, "output-dir", ".", "output directory")
 	transcribeCmd.Flags().StringVar(&trFormat, "format", "md", "output format: json, txt, srt, md")
-	transcribeCmd.Flags().StringVar(&trOptions, "options", "", "comma-separated disable flags: no-diarize, no-polish, no-compact")
+	transcribeCmd.Flags().StringVar(&trOptions, "options", "", "comma-separated disable flags: no-diarize, no-polish, no-compact, no-speaker-recognition")
 	transcribeCmd.Flags().StringVar(&trContext, "context", "", "path to meeting context file (agenda, notes) for better hotwords and polishing")
 	transcribeCmd.Flags().IntVar(&trCompactGap, "compact-gap", 2000, "max silence gap in ms before starting a new paragraph")
 	transcribeCmd.Flags().StringVar(&trLanguage, "language", "", "force language code (e.g. pt, en), empty for auto-detect")
+	transcribeCmd.Flags().BoolVar(&trIdentify, "identify", false, "interactively identify unrecognized speakers after transcription")
 	rootCmd.AddCommand(transcribeCmd)
 }
