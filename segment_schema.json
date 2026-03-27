@@ -1,0 +1,32 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Transcript Segments",
+  "description": "Output contract for modal-whisper transcription. Consumed by plaud-cli.",
+  "type": "array",
+  "items": {
+    "type": "object",
+    "required": ["start_time", "end_time", "content", "speaker"],
+    "additionalProperties": false,
+    "properties": {
+      "start_time": {
+        "type": "integer",
+        "description": "Segment start time in milliseconds",
+        "minimum": 0
+      },
+      "end_time": {
+        "type": "integer",
+        "description": "Segment end time in milliseconds",
+        "minimum": 0
+      },
+      "content": {
+        "type": "string",
+        "description": "Transcribed text, trimmed, non-empty",
+        "minLength": 1
+      },
+      "speaker": {
+        "type": "string",
+        "description": "Speaker ID (e.g. SPEAKER_00) or empty string if diarization is off"
+      }
+    }
+  }
+}

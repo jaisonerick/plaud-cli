@@ -75,34 +75,38 @@ class WhisperTranscriber:
                 return_char_alignments=False,
             )
 
-            # 3. Optionally diarize
+            # 3. Optionally diarize (falls back to no speakers on error)
             if diarize and hf_token:
-                from pyannote.audio import Pipeline as PyannotePipeline
+                try:
+                    from pyannote.audio import Pipeline as PyannotePipeline
 
-                diarize_model = PyannotePipeline.from_pretrained(
-                    "pyannote/speaker-diarization-community-1",
-                    token=hf_token,
-                    cache_dir="/cache/huggingface",
-                ).to(torch.device("cuda"))
+                    diarize_model = PyannotePipeline.from_pretrained(
+                        "pyannote/speaker-diarization-community-1",
+                        token=hf_token,
+                        cache_dir="/cache/huggingface",
+                    ).to(torch.device("cuda"))
 
-                diarize_result = diarize_model(audio_path)
+                    diarize_result = diarize_model(audio_path)
 
-                # Assign speakers to segments based on overlap with diarization
-                for seg in result["segments"]:
-                    seg_start = seg["start"]
-                    seg_end = seg["end"]
-                    best_speaker = ""
-                    best_overlap = 0.0
+                    # Assign speakers to segments based on overlap with diarization
+                    for seg in result["segments"]:
+                        seg_start = seg["start"]
+                        seg_end = seg["end"]
+                        best_speaker = ""
+                        best_overlap = 0.0
 
-                    for turn, _, speaker in diarize_result.itertracks(yield_label=True):
-                        overlap = max(0, min(seg_end, turn.end) - max(seg_start, turn.start))
-                        if overlap > best_overlap:
-                            best_overlap = overlap
-                            best_speaker = speaker
+                        for turn, _, speaker in diarize_result.itertracks(yield_label=True):
+                            overlap = max(0, min(seg_end, turn.end) - max(seg_start, turn.start))
+                            if overlap > best_overlap:
+                                best_overlap = overlap
+                                best_speaker = speaker
 
-                    seg["speaker"] = best_speaker
+                        seg["speaker"] = best_speaker
+                except Exception as e:
+                    import sys
+                    print(f"Warning: diarization failed, returning transcript without speakers: {e}", file=sys.stderr)
 
-            # 4. Convert to plaud-cli contract format
+            # 4. Convert to segment contract format (see segment_schema.json)
             segments = []
             for seg in result["segments"]:
                 start_ms = int(math.floor(seg.get("start", 0) * 1000))
