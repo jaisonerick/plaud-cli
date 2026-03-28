@@ -4,7 +4,7 @@ import sys
 from .llm import LLMClient
 from .prompts import load_prompt
 
-_CHUNK_TARGET = 50
+_CHUNK_TARGET = 15
 _SEGMENT_PATTERN = re.compile(r"<segment:(\d+)>\n?(.*?)\n?</segment>", re.DOTALL)
 
 
