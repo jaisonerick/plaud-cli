@@ -184,18 +184,21 @@ Examples:
 				}
 
 			case "error":
+				tracker.Abort()
 				tracker.Wait()
 				return fmt.Errorf("transcription failed at %s: %s", evt.Stage, evt.Message)
 			}
 		}
 		if err := <-errCh; err != nil {
+			tracker.Abort()
 			tracker.Wait()
-			return fmt.Errorf("stream error: %w", err)
+			return err
 		}
 
 		if result == nil {
+			tracker.Abort()
 			tracker.Wait()
-			return fmt.Errorf("no result received from server")
+			return fmt.Errorf("no result received — the server stream ended prematurely (the container may have crashed)")
 		}
 
 		// Phase 3: Save result

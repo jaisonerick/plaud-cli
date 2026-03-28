@@ -197,6 +197,15 @@ func (c *HTTPClient) TranscribeStream(ctx context.Context, audioData []byte, opt
 
 		resp, err := c.HTTP.Do(req)
 		if err != nil {
+			errStr := strings.ToLower(err.Error())
+			if strings.Contains(errStr, "connection refused") {
+				errCh <- fmt.Errorf("server is not reachable — the container may be down. Try again in a few minutes")
+				return
+			}
+			if strings.Contains(errStr, "timeout") || strings.Contains(errStr, "deadline exceeded") {
+				errCh <- fmt.Errorf("request timed out — the server may be overloaded. Try again later")
+				return
+			}
 			errCh <- fmt.Errorf("sending request: %w", err)
 			return
 		}
@@ -208,7 +217,7 @@ func (c *HTTPClient) TranscribeStream(ctx context.Context, audioData []byte, opt
 		}
 		if resp.StatusCode != http.StatusOK {
 			respBody, _ := io.ReadAll(resp.Body)
-			errCh <- fmt.Errorf("server returned status %d: %s", resp.StatusCode, string(respBody))
+			errCh <- classifyServerError(resp.StatusCode, respBody)
 			return
 		}
 
@@ -238,11 +247,77 @@ func (c *HTTPClient) TranscribeStream(ctx context.Context, audioData []byte, opt
 		}
 
 		if err := scanner.Err(); err != nil {
+			errStr := strings.ToLower(err.Error())
+			if strings.Contains(errStr, "connection reset") ||
+				strings.Contains(errStr, "broken pipe") ||
+				strings.Contains(errStr, "eof") ||
+				strings.Contains(errStr, "internal_error") ||
+				strings.Contains(errStr, "stream error") {
+				errCh <- fmt.Errorf("server connection lost — the container likely crashed (possibly GPU out of memory). Try again in a few minutes")
+				return
+			}
 			errCh <- fmt.Errorf("reading SSE stream: %w", err)
 		}
 	}()
 
 	return events, errCh
+}
+
+// classifyServerError turns raw HTTP error responses into actionable messages.
+func classifyServerError(status int, body []byte) error {
+	bodyStr := strings.ToLower(string(body))
+
+	// Detect CUDA/GPU out-of-memory errors
+	if strings.Contains(bodyStr, "cuda") && strings.Contains(bodyStr, "out of memory") ||
+		strings.Contains(bodyStr, "cuda out of memory") ||
+		strings.Contains(bodyStr, "torch.outofmemoryerror") {
+		return fmt.Errorf("server GPU out of memory (CUDA OOM). The container may be overloaded — try again in a few minutes")
+	}
+
+	// Detect container crashes / restarts
+	if strings.Contains(bodyStr, "container") && (strings.Contains(bodyStr, "killed") || strings.Contains(bodyStr, "oom") || strings.Contains(bodyStr, "crashed")) {
+		return fmt.Errorf("server container crashed (likely out of memory). Try again in a few minutes")
+	}
+
+	switch status {
+	case http.StatusBadGateway:
+		return fmt.Errorf("server unavailable (502 Bad Gateway). The container may be starting up or crashed — try again in a minute")
+	case http.StatusServiceUnavailable:
+		return fmt.Errorf("server unavailable (503). The container may be scaling up — try again in a minute")
+	case http.StatusGatewayTimeout:
+		return fmt.Errorf("server timed out (504). The audio may be too long or the container is overloaded — try again later")
+	case http.StatusInternalServerError:
+		// Try to extract a meaningful message from the body
+		if len(body) > 0 {
+			// Try JSON error response
+			var errResp struct {
+				Detail string `json:"detail"`
+				Error  string `json:"error"`
+			}
+			if json.Unmarshal(body, &errResp) == nil {
+				msg := errResp.Detail
+				if msg == "" {
+					msg = errResp.Error
+				}
+				if msg != "" {
+					return fmt.Errorf("server error (500): %s", msg)
+				}
+			}
+			// Truncate raw body if too long
+			raw := string(body)
+			if len(raw) > 200 {
+				raw = raw[:200] + "..."
+			}
+			return fmt.Errorf("server error (500): %s", raw)
+		}
+		return fmt.Errorf("server error (500). The container may have crashed — try again in a minute")
+	default:
+		raw := string(body)
+		if len(raw) > 200 {
+			raw = raw[:200] + "..."
+		}
+		return fmt.Errorf("server returned status %d: %s", status, raw)
+	}
 }
 
 // SetSpeakerName registers a speaker embedding under a name.

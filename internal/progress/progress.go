@@ -215,6 +215,16 @@ func (t *Tracker) Update(evt Event) {
 	}
 }
 
+// Abort aborts all incomplete bars so that Wait() won't deadlock.
+// Call this before Wait() in error paths.
+func (t *Tracker) Abort() {
+	for _, st := range t.stages {
+		if !st.done.Load() {
+			st.bar.Abort(true)
+		}
+	}
+}
+
 // Wait blocks until all bars have completed rendering.
 func (t *Tracker) Wait() {
 	t.p.Wait()
