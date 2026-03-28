@@ -29,6 +29,15 @@ class SegmentConverter:
 
         return segments
 
+    @staticmethod
+    def dedup_segments(segments: list[dict]) -> list[dict]:
+        """Apply repetition dedup to all segment contents."""
+        for seg in segments:
+            text = seg.get("content", "")
+            if text:
+                seg["content"] = _dedup_repeated_phrases(text)
+        return [s for s in segments if s.get("content")]
+
 
 def _dedup_repeated_phrases(text: str, max_repeats: int = 2) -> str:
     """Collapse runs of 3+ identical consecutive phrases into at most max_repeats.

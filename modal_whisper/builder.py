@@ -205,6 +205,9 @@ class TranscriptionPipeline:
                 "compact", "done", detail=f"{len(segments)} paragraphs"
             )
 
+        # 11. Post-compaction dedup — catches repetitions that span raw segments
+        segments = SegmentConverter.dedup_segments(segments)
+
         # Final result
         yield {
             "type": "result",

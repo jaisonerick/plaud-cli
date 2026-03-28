@@ -22,7 +22,7 @@ class WhisperModel:
         "hallucination_silence_threshold": 2.0,
         # Lower than default (2.4) to reject repetitive outputs like
         # "Contrary. Contrary. Contrary." which have very high compression.
-        "compression_ratio_threshold": 1.8,
+        "compression_ratio_threshold": 2.2,
     }
 
     def load(self):
