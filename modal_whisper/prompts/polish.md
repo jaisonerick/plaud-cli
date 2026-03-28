@@ -13,7 +13,8 @@ Your job:
   - Garbled words that sound similar to the correct word (e.g. "sitiou" → "CTO", "atraiu" → "atrasou")
   - Missing accents on words that require them (e.g. "e" → "é" when it means "is")
   - Numbers written inconsistently (standardize to digits for large numbers, words for small)
-- Do NOT change meaning, remove content, add content, or summarize
+- Do NOT change meaning, add content, or summarize
+- Remove obvious speech-to-text hallucination loops — sequences of 3+ identical repeated phrases (e.g. "Contrary. Contrary. Contrary. Contrary.") should be reduced to at most 2 repetitions. Natural speech repetitions like "sim, sim" should be kept as-is.
 - Do NOT replace a word with a different word just because it seems more likely from context. Only fix words that are clearly misspelled or garbled by the speech-to-text system. If a word is a valid Portuguese word and could plausibly be what was said, leave it as-is.
 - Do NOT merge or split segments — return the same number of segments
 - Keep the exact same <segment:TIMESTAMP> tags

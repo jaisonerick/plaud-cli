@@ -75,10 +75,10 @@ class TranscriptionPipeline:
             stages.append(
                 {"id": "speaker_recognition", "label": "Recognizing speakers"}
             )
-        if opts.polish:
-            stages.append({"id": "polish", "label": "Polishing transcript"})
         if opts.compact and opts.diarize:
             stages.append({"id": "compact", "label": "Compacting segments"})
+        if opts.polish:
+            stages.append({"id": "polish", "label": "Polishing transcript"})
 
         yield {"type": "init", "stages": stages}
 
@@ -178,7 +178,16 @@ class TranscriptionPipeline:
 
             store.close()
 
-        # 9. Polishing (with per-chunk progress)
+        # 9. Compaction (before polishing so the LLM sees full paragraphs
+        #    and can handle repetitions/hallucinations with context)
+        if opts.compact and diarized:
+            yield _update("compact", "started")
+            segments = Compactor(opts.compact_gap).run(segments)
+            yield _update(
+                "compact", "done", detail=f"{len(segments)} paragraphs"
+            )
+
+        # 10. Polishing (with per-chunk progress)
         if opts.polish:
             polisher = Polisher(self._llm, context_summary)
             yield _update("polish", "started", detail="0 chunks")
@@ -196,17 +205,6 @@ class TranscriptionPipeline:
                 )
             segments = polished
             yield _update("polish", "done", detail=f"{total_chunks} chunks")
-
-        # 10. Compaction
-        if opts.compact and diarized:
-            yield _update("compact", "started")
-            segments = Compactor(opts.compact_gap).run(segments)
-            yield _update(
-                "compact", "done", detail=f"{len(segments)} paragraphs"
-            )
-
-        # 11. Post-compaction dedup — catches repetitions that span raw segments
-        segments = SegmentConverter.dedup_segments(segments)
 
         # Final result
         yield {
