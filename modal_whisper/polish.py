@@ -19,7 +19,7 @@ class Polisher:
         chunks = self._chunk(segments)
         print(f"Polishing transcript: {len(segments)} segments in {len(chunks)} chunks (parallel)", file=sys.stderr)
 
-        prompt = load_prompt("polish").format(context_summary=self.context_summary)
+        prompt = load_prompt("polish").replace("{context_summary}", self.context_summary)
         messages_list = [
             [
                 {"role": "system", "content": prompt},
@@ -35,6 +35,27 @@ class Polisher:
             polished.extend(self._parse(response.strip(), chunk))
 
         return polished
+
+    def run_iter(self, segments: list[dict]):
+        """Yield (chunk_index, total_chunks, polished_chunk) as each completes in order.
+
+        Used by transcribe_stream() for per-chunk progress events.
+        """
+        chunks = self._chunk(segments)
+        total = len(chunks)
+        print(f"Polishing transcript: {len(segments)} segments in {total} chunks (parallel)", file=sys.stderr)
+
+        prompt = load_prompt("polish").replace("{context_summary}", self.context_summary)
+        messages_list = [
+            [
+                {"role": "system", "content": prompt},
+                {"role": "user", "content": self._format(chunk)},
+            ]
+            for chunk in chunks
+        ]
+
+        for i, response in enumerate(self.llm.call_batch_iter(messages_list)):
+            yield i, total, self._parse(response.strip(), chunks[i])
 
     @staticmethod
     def _format(chunk: list[dict]) -> str:

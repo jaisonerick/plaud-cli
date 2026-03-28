@@ -36,6 +36,30 @@ class LLMClient:
 
         return results
 
+    def call_batch_iter(self, messages_list: list[list[dict]]):
+        """Yield responses as they complete, in submission order.
+
+        Like call_batch(), but yields results one at a time as sequential
+        chunks become available. Used for per-chunk progress reporting.
+        """
+        results = [None] * len(messages_list)
+        completed = [False] * len(messages_list)
+        next_idx = 0
+
+        with ThreadPoolExecutor(max_workers=self.max_workers) as pool:
+            futures = {
+                pool.submit(self.call, msgs): i
+                for i, msgs in enumerate(messages_list)
+            }
+            for future in as_completed(futures):
+                idx = futures[future]
+                results[idx] = future.result()
+                completed[idx] = True
+
+                while next_idx < len(results) and completed[next_idx]:
+                    yield results[next_idx]
+                    next_idx += 1
+
 
 def strip_code_fences(text: str) -> str:
     """Remove markdown code fences from LLM output."""
