@@ -8,18 +8,46 @@ _CHUNK_TARGET = 15
 _SEGMENT_PATTERN = re.compile(r"<segment:(\d+)>\n?(.*?)\n?</segment>", re.DOTALL)
 
 
+_LANGUAGE_NAMES = {
+    "pt": "Brazilian Portuguese (pt-BR)",
+    "en": "English",
+    "es": "Spanish",
+    "fr": "French",
+    "de": "German",
+    "it": "Italian",
+}
+
+
 class Polisher:
     """Fixes transcription errors via LLM, processing in parallel chunks."""
 
-    def __init__(self, llm: LLMClient, context_summary: str):
+    def __init__(self, llm: LLMClient, context_summary: str, language: str = ""):
         self.llm = llm
         self.context_summary = context_summary
+        self.language = language
+
+    def _build_prompt(self) -> str:
+        lang_name = _LANGUAGE_NAMES.get(self.language, self.language) if self.language else ""
+        prompt = load_prompt("polish")
+        if lang_name:
+            prompt = prompt.replace("{language}", lang_name)
+            prompt = prompt.replace("{language_instruction}", (
+                f"CRITICAL: Do NOT translate the text. The output language MUST remain {lang_name}. "
+                f"If the speech-to-text system produced text in the wrong language, convert it back to "
+                f"{lang_name} — the speakers were speaking {lang_name}, not another language."
+            ))
+        else:
+            prompt = prompt.replace("{language}", "the original language")
+            prompt = prompt.replace("{language_instruction}",
+                "Keep the text in the same language as the input. Do not translate.")
+        prompt = prompt.replace("{context_summary}", self.context_summary)
+        return prompt
 
     def run(self, segments: list[dict]) -> list[dict]:
         chunks = self._chunk(segments)
         print(f"Polishing transcript: {len(segments)} segments in {len(chunks)} chunks (parallel)", file=sys.stderr)
 
-        prompt = load_prompt("polish").replace("{context_summary}", self.context_summary)
+        prompt = self._build_prompt()
         messages_list = [
             [
                 {"role": "system", "content": prompt},
@@ -45,7 +73,7 @@ class Polisher:
         total = len(chunks)
         print(f"Polishing transcript: {len(segments)} segments in {total} chunks (parallel)", file=sys.stderr)
 
-        prompt = load_prompt("polish").replace("{context_summary}", self.context_summary)
+        prompt = self._build_prompt()
         messages_list = [
             [
                 {"role": "system", "content": prompt},

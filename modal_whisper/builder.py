@@ -109,7 +109,10 @@ class TranscriptionPipeline:
         session.load_audio(audio_data)
         result = session.run(opts.language)
         seg_count = len(result.get("segments", []))
-        yield _update("transcribe", "done", detail=f"{seg_count} segments")
+        detected_language = result.get("language", "")
+        # Use forced language if provided, otherwise use detected
+        effective_language = opts.language or detected_language
+        yield _update("transcribe", "done", detail=f"{seg_count} segments, lang={effective_language}")
 
         # 4. Alignment
         yield _update("align", "started")
@@ -144,6 +147,10 @@ class TranscriptionPipeline:
                 yield _update("diarize", "done", detail="failed")
                 yield _update("speaker_assign", "started")
                 yield _update("speaker_assign", "done")
+
+        # Free GPU memory from transcription, alignment, and diarization.
+        # Audio and per-request model are no longer needed after this point.
+        session.cleanup()
 
         # 7. Segment conversion
         yield _update("segment_convert", "started")
@@ -188,8 +195,12 @@ class TranscriptionPipeline:
             )
 
         # 10. Polishing (with per-chunk progress)
+        #     Pass the user's forced language directly. When set, the polisher
+        #     will correct Whisper's output back to that language if Whisper
+        #     auto-detected wrong. When empty, polishes in whatever language
+        #     Whisper produced.
         if opts.polish:
-            polisher = Polisher(self._llm, context_summary)
+            polisher = Polisher(self._llm, context_summary, language=opts.language)
             yield _update("polish", "started", detail="0 chunks")
 
             polished = []

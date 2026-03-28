@@ -2,6 +2,7 @@ import gc
 import os
 import tempfile
 
+import torch
 import whisperx
 
 from .model import WhisperModel
@@ -23,6 +24,7 @@ class TranscribeSession:
         beam_size: int = 5,
     ):
         self.device = whisper_model.device
+        self._base_model = whisper_model.model
         self._model = whisper_model.with_asr_options(
             hotwords=hotwords,
             initial_prompt=initial_prompt,
@@ -67,7 +69,18 @@ class TranscribeSession:
             self.device,
             return_char_alignments=False,
         )
-        del align_model
+        del align_model, align_metadata
         gc.collect()
+        torch.cuda.empty_cache()
 
         return aligned
+
+    def cleanup(self):
+        """Release GPU memory held by the per-request model and audio."""
+        # If with_asr_options loaded a separate model, free it
+        if self._model is not None and self._model is not self._base_model:
+            del self._model
+        self._model = None
+        self.audio = None
+        gc.collect()
+        torch.cuda.empty_cache()

@@ -1,6 +1,7 @@
 import gc
 import sys
 
+import torch
 from whisperx.diarize import DiarizationPipeline, assign_word_speakers
 
 
@@ -41,6 +42,7 @@ class Diarizer:
 
             del pipeline
             gc.collect()
+            torch.cuda.empty_cache()
 
             return DiarizeResult(segments, embeddings)
         except Exception as e:
