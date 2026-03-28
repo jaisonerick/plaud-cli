@@ -274,6 +274,17 @@ Examples:
 							}(speakerID, name)
 						}
 						wg.Wait()
+
+						// Update speakers map and re-save transcript with real names
+						for sid, name := range idResult.Names {
+							result.Speakers[sid] = name
+						}
+						applySpeakerNames(result.Segments, result.Speakers)
+						if err := saveTranscript(result.Segments, trFormat, dest); err != nil {
+							fmt.Fprintf(os.Stderr, "  Warning: failed to update transcript: %v\n", err)
+						} else {
+							fmt.Fprintf(os.Stderr, "  Updated %s\n", dest)
+						}
 					}
 				}
 			} else {
@@ -294,6 +305,28 @@ Examples:
 
 		return nil
 	},
+}
+
+// applySpeakerNames replaces SPEAKER_XX tags in segments with real names from the speakers map.
+func applySpeakerNames(segments []transcript.Segment, speakers map[string]string) {
+	for i := range segments {
+		if name, ok := speakers[segments[i].Speaker]; ok && name != segments[i].Speaker {
+			segments[i].Speaker = name
+		}
+	}
+}
+
+// saveTranscript writes segments to the given path in the specified format.
+func saveTranscript(segments []transcript.Segment, format, dest string) error {
+	if format == "json" {
+		data, err := json.MarshalIndent(segments, "", "  ")
+		if err != nil {
+			return fmt.Errorf("marshaling transcript: %w", err)
+		}
+		return os.WriteFile(dest, data, 0644)
+	}
+	_, content := transcript.Format(segments, format)
+	return os.WriteFile(dest, []byte(content), 0644)
 }
 
 func init() {
