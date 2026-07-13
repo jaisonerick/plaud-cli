@@ -12,6 +12,7 @@ import (
 	"net/url"
 	"os"
 	"strings"
+	"time"
 )
 
 // Client wraps the Plaud API.
@@ -40,6 +41,10 @@ func (c *Client) do(ctx context.Context, req *http.Request, result interface{}) 
 	req.Header.Set("x-request-id", randomHex(5))
 	req.Header.Set("x-device-id", c.DeviceID)
 	req.Header.Set("x-pld-tag", c.DeviceID)
+	if tz := time.Now().Location().String(); strings.Contains(tz, "/") {
+		// IANA zone name (e.g. America/Sao_Paulo), matching the web app's `timezone` header.
+		req.Header.Set("timezone", tz)
+	}
 
 	resp, err := c.HTTP.Do(req)
 	if err != nil {
