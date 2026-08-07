@@ -85,16 +85,17 @@ func fetchLatestRelease() (*ghRelease, error) {
 // CheckForUpdate checks if a newer version is available, at most once per day.
 // Prints a notice to stderr if an update is available. Errors are silently ignored.
 func CheckForUpdate() {
-	if Version == "dev" {
+	// A build from source (`dev`, or a git-describe string like 0.6.1-3-gabc1234)
+	// is ahead of the latest release, not behind it.
+	current := strings.TrimPrefix(Version, "v")
+	if current == "dev" || strings.Contains(current, "-g") {
 		return
 	}
 
 	state := loadUpdateState()
 	if state != nil && time.Since(state.CheckedAt) < 24*time.Hour {
 		// Use cached result
-		if state.LatestVersion != "" && state.LatestVersion != Version {
-			fmt.Fprintf(os.Stderr, "\nA new version of plaud is available: v%s → v%s\nRun `plaud update` to upgrade.\n", Version, state.LatestVersion)
-		}
+		notifyUpdate(current, strings.TrimPrefix(state.LatestVersion, "v"))
 		return
 	}
 
@@ -109,9 +110,14 @@ func CheckForUpdate() {
 		LatestVersion: latest,
 	})
 
-	if latest != Version {
-		fmt.Fprintf(os.Stderr, "\nA new version of plaud is available: v%s → v%s\nRun `plaud update` to upgrade.\n", Version, latest)
+	notifyUpdate(current, latest)
+}
+
+func notifyUpdate(current, latest string) {
+	if latest == "" || latest == current {
+		return
 	}
+	fmt.Fprintf(os.Stderr, "\nA new version of plaud is available: v%s → v%s\nRun `plaud update` to upgrade.\n", current, latest)
 }
 
 func init() {

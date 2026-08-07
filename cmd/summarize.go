@@ -114,7 +114,7 @@ Examples:
 			fmt.Fprintf(os.Stderr, "Generating summary (writing to %s)...\n", sumOutput)
 		} else {
 			writer = os.Stdout
-			fmt.Fprintln(os.Stderr, "Generating summary...\n")
+			fmt.Fprintln(os.Stderr, "Generating summary...")
 		}
 
 		userMessage := fmt.Sprintf("Here is the transcript of a recording titled %q:\n\n%s", detail.Name, text)

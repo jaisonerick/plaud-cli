@@ -2,6 +2,7 @@ package config
 
 import (
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
@@ -30,26 +31,47 @@ func configPath() (string, error) {
 	return filepath.Join(home, configDir, configFile), nil
 }
 
-// Load reads the config from disk. Returns a zero Config (not an error) if the file doesn't exist.
+// Load reads the config from disk, then lets the environment override it.
+// Returns a zero Config (not an error) if the file doesn't exist, so an
+// environment holding PLAUD_TOKEN needs no config file at all.
 func Load() (*Config, error) {
 	p, err := configPath()
 	if err != nil {
 		return nil, err
 	}
 
+	cfg := Config{}
 	data, err := os.ReadFile(p)
-	if err != nil {
-		if os.IsNotExist(err) {
-			return &Config{}, nil
+	switch {
+	case err == nil:
+		if err := json.Unmarshal(data, &cfg); err != nil {
+			return nil, fmt.Errorf("parsing config: %w", err)
 		}
+	case !os.IsNotExist(err):
 		return nil, fmt.Errorf("reading config: %w", err)
 	}
 
-	var cfg Config
-	if err := json.Unmarshal(data, &cfg); err != nil {
-		return nil, fmt.Errorf("parsing config: %w", err)
-	}
+	cfg.applyEnv()
 	return &cfg, nil
+}
+
+// applyEnv lets environment variables stand in for the config file, which is
+// what makes the CLI usable in a container, a CI job or someone else's machine
+// where no interactive login has ever run.
+func (c *Config) applyEnv() {
+	if v := os.Getenv("PLAUD_TOKEN"); v != "" {
+		c.AccessToken = v
+	}
+	if v := os.Getenv("PLAUD_DEVICE_ID"); v != "" {
+		c.DeviceID = v
+	}
+	if c.DeviceID == "" && c.AccessToken != "" {
+		// Nothing on disk to hold a random device ID, and a new one on every
+		// invocation looks like a new device to the API. Derive a stable one
+		// from the token instead.
+		sum := sha256.Sum256([]byte(c.AccessToken))
+		c.DeviceID = hex.EncodeToString(sum[:8])
+	}
 }
 
 // Save writes the config to disk with restricted permissions.

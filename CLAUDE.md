@@ -44,11 +44,18 @@ Transcripts (from both Plaud API and Modal Whisper) use a shared segment format.
 ## Environment Variables
 
 ```
+PLAUD_TOKEN            Access token, standing in for token.json entirely
+PLAUD_DEVICE_ID        Device ID sent as x-device-id (derived from the token when unset)
 PLAUD_API_URL          Override API endpoint
 ANTHROPIC_API_KEY      Claude API key (ask/summarize commands)
 MODAL_TOKEN_ID         Modal auth (or use `plaud modal-auth`)
 MODAL_TOKEN_SECRET     Modal auth (or use `plaud modal-auth`)
+PLAUD_EMAIL            Non-interactive `login`: email to send the code to
+PLAUD_CODE             Non-interactive `login`: the emailed code
+PLAUD_OTP_TOKEN        Non-interactive `login`: the OTP token from the send step
 ```
+
+`PLAUD_TOKEN` is what makes the CLI run where no interactive login ever happened — a container, a CI job, another person's machine. The environment wins over the file, and nothing is written to disk.
 
 ## Config Files
 
