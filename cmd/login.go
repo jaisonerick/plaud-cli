@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"encoding/json"
 	"fmt"
 	"io"
 	"os"
@@ -15,25 +16,35 @@ var (
 	emailFlag         string
 	passwordFlag      bool
 	passwordStdinFlag bool
+	sendCodeFlag      bool
+	codeFlag          string
+	otpTokenFlag      string
 )
 
 var loginCmd = &cobra.Command{
 	Use:   "login",
 	Short: "Authenticate with Plaud.ai",
-	Long: `Authenticate with Plaud.ai via password, email code, or an existing token.
+	Long: `Authenticate with Plaud.ai via an email code, a password, or an existing token.
 
-  plaud login --password                       # Email and password
-  plaud login --email you@example.com --password
-  plaud login --email you@example.com --password-stdin < secret
   plaud login                                  # Interactive email code flow
+  plaud login --password                       # Email and password
   plaud login --token TOKEN                    # Use an existing access token
 
-The password is prompted for rather than taken as an argument, which would put
-it in the shell history and in the process list. For automation, pass it on
-stdin or in PLAUD_PASSWORD.
+The email code flow also comes in two halves, so that something other than this
+terminal can collect the code: a chat with an assistant, a form, another
+machine. Nothing is stored between the two calls except the handle printed by
+the first:
+
+  plaud login --send-code --email you@example.com [--json]
+  plaud login --email you@example.com --otp-token TOKEN --code 123456
+
+Prefer that over the password whenever a third party is doing the typing: the
+code expires and is good once, a password is not. The password is prompted for
+rather than taken as an argument, which would put it in the shell history and
+in the process list; --password-stdin and PLAUD_PASSWORD cover automation.
 
 An account created through Google, Apple or Microsoft has no password until one
-is set in the Plaud app; use the email code flow for those.`,
+is set in the Plaud app, so those accounts use the code flow.`,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		ctx := cmd.Context()
 
@@ -47,13 +58,40 @@ is set in the Plaud app; use the email code flow for those.`,
 			email = emailFlag
 		}
 		code := os.Getenv("PLAUD_CODE")
+		if codeFlag != "" {
+			code = codeFlag
+		}
 		otpToken := os.Getenv("PLAUD_OTP_TOKEN")
+		if otpTokenFlag != "" {
+			otpToken = otpTokenFlag
+		}
 
 		if passwordFlag || passwordStdinFlag || os.Getenv("PLAUD_PASSWORD") != "" {
 			return passwordLogin(cmd, email)
 		}
 
-		// If all env vars are set, skip prompts entirely
+		// First half of the split code flow: send the code and hand the caller
+		// the handle to finish with, so the two steps can be minutes and one
+		// conversation apart.
+		if sendCodeFlag {
+			if email == "" {
+				return fmt.Errorf("--send-code needs --email")
+			}
+			otp, err := client.SendCode(ctx, email)
+			if err != nil {
+				return fmt.Errorf("sending code: %w", err)
+			}
+			if jsonOut {
+				return json.NewEncoder(os.Stdout).Encode(map[string]string{
+					"email": email, "otp_token": otp,
+				})
+			}
+			fmt.Printf("Code sent to %s.\n", email)
+			fmt.Printf("Finish with:\n  plaud login --email %s --otp-token %s --code <code>\n", email, otp)
+			return nil
+		}
+
+		// If the handle and the code are both known, there is nothing to prompt for.
 		if otpToken != "" && code != "" {
 			fmt.Print("Authenticating... ")
 			token, err := client.VerifyCode(ctx, otpToken, code)
@@ -178,5 +216,8 @@ func init() {
 	loginCmd.Flags().StringVar(&emailFlag, "email", "", "account email (also read from PLAUD_EMAIL)")
 	loginCmd.Flags().BoolVar(&passwordFlag, "password", false, "authenticate with a password, prompted for")
 	loginCmd.Flags().BoolVar(&passwordStdinFlag, "password-stdin", false, "read the password from stdin")
+	loginCmd.Flags().BoolVar(&sendCodeFlag, "send-code", false, "send the login code and print the handle to finish with")
+	loginCmd.Flags().StringVar(&otpTokenFlag, "otp-token", "", "handle returned by --send-code (also PLAUD_OTP_TOKEN)")
+	loginCmd.Flags().StringVar(&codeFlag, "code", "", "the code that arrived by email (also PLAUD_CODE)")
 	rootCmd.AddCommand(loginCmd)
 }
