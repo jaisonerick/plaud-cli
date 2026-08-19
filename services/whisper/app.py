@@ -184,11 +184,19 @@ class WhisperTranscriber:
             store = await open_speaker_store()
             embedding = store.get_audio_speaker_info(audio_id, speaker_id)
             if embedding is None:
+                known = sorted(store.get_audio_embeddings(audio_id))
                 store.close()
-                raise HTTPException(
-                    status_code=404,
-                    detail=f"No embedding found for {audio_id}/{speaker_id}",
-                )
+                if known:
+                    detail = (
+                        f"{audio_id} has no speaker {speaker_id!r}. "
+                        f"It has: {', '.join(known)}"
+                    )
+                else:
+                    detail = (
+                        f"nothing is stored for recording {audio_id} — "
+                        "transcribe it with diarization first"
+                    )
+                raise HTTPException(status_code=404, detail=detail)
 
             store.set_known_speaker(name, embedding)
             store.close()

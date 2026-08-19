@@ -85,7 +85,8 @@ func (c *HTTPClient) SetSpeakerName(ctx context.Context, audioID, speakerID, nam
 	defer resp.Body.Close()
 
 	if resp.StatusCode == http.StatusNotFound {
-		return fmt.Errorf("the server no longer holds an embedding for %s/%s — name it from the transcript instead", audioID, speakerID)
+		body, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("%s", detailOf(body))
 	}
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(resp.Body)
