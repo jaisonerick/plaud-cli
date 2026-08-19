@@ -272,34 +272,6 @@ class WhisperTranscriber:
             await speaker_volume.commit.aio()
             return {"name": name}
 
-        @api.get("/aliases")
-        async def list_aliases():
-            """How transcripts spell people, so a caller need not ask twice."""
-            store = await open_speaker_store()
-            aliases = store.aliases()
-            store.close()
-            return aliases
-
-        @api.post("/aliases")
-        async def set_alias(
-            spelling: str = Form(...),
-            name: str = Form(...),
-            who: Identity = Depends(caller),
-        ):
-            """Record that transcripts calling somebody `spelling` mean `name`."""
-            store = await open_speaker_store()
-            person_id = store.person_id(name)
-            if person_id is None:
-                store.close()
-                raise HTTPException(
-                    status_code=404,
-                    detail=f"nobody is called {name!r} yet — name a voice of theirs first",
-                )
-            store.set_alias(spelling, person_id, who.email)
-            store.close()
-            await speaker_volume.commit.aio()
-            return {"spelling": spelling, "name": name}
-
         @api.post("/speakers/enroll")
         async def enroll_speakers(
             audio: UploadFile = File(...),

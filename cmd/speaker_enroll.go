@@ -83,10 +83,7 @@ Examples:
 			return err
 		}
 
-		samples, incomplete, err := resolveFullNames(ctx, whisper, samples)
-		if err != nil {
-			return err
-		}
+		samples, incomplete := setAsideIncompleteNames(samples)
 
 		byRecording, chosen := selectSamples(samples)
 		reportPlan(samples, chosen)
@@ -281,31 +278,22 @@ func askMerge(name string, samples []voiceSample, matches []speaker.Match) (stri
 	}
 }
 
-// resolveFullNames maps each spelling through the aliases the service holds
-// and sets aside whoever is still known only by a first name. The answers live
-// there so that one person answering "who is 'luca'?" answers it for everyone.
-func resolveFullNames(ctx context.Context, whisper *modal.HTTPClient, samples map[string][]voiceSample) (map[string][]voiceSample, []string, error) {
-	aliases, err := whisper.Aliases(ctx)
-	if err != nil {
-		return nil, nil, fmt.Errorf("reading the spellings the service knows: %w", err)
-	}
-
+// setAsideIncompleteNames keeps whoever the transcripts already name in full
+// and reports the rest. Transcripts spell people however the person typing
+// felt like, and nothing mechanical turns "Tom" into Antonio Colombo.
+func setAsideIncompleteNames(samples map[string][]voiceSample) (map[string][]voiceSample, []string) {
 	full := map[string][]voiceSample{}
 	var incomplete []string
 
 	for name, found := range samples {
-		resolved := name
-		if mapped, ok := aliases[speaker.Fold(name)]; ok && mapped != "" {
-			resolved = mapped
-		}
-		if !speaker.IsFull(resolved) {
+		if !speaker.IsFull(name) {
 			incomplete = append(incomplete, name)
 			continue
 		}
-		full[resolved] = append(full[resolved], found...)
+		full[name] = append(full[name], found...)
 	}
 	sort.Strings(incomplete)
-	return full, incomplete, nil
+	return full, incomplete
 }
 
 // reportIncomplete names who was left out and how to answer for them.
@@ -314,7 +302,7 @@ func reportIncomplete(incomplete []string) error {
 		return nil
 	}
 	fmt.Printf("\nLeft out, known only by a first name: %s\n", strings.Join(incomplete, ", "))
-	fmt.Printf("Say who they are with 'plaud speaker alias \"<spelling>\" \"First Last\"', then run this again.\n")
+	fmt.Printf("Name them from a recording instead: 'plaud speaker name <recording-id> <label> \"First Last\" --company X'.\n")
 	return nil
 }
 

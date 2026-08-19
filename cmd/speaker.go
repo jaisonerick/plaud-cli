@@ -80,37 +80,6 @@ Example:
 	},
 }
 
-var speakerAliasCmd = &cobra.Command{
-	Use:   "alias <spelling> <first-last>",
-	Short: "Record how transcripts spell somebody",
-	Long: `Transcripts call people whatever the person typing felt like — "luca",
-"Vic", "Amanda" — and only somebody who knows them can say who that is.
-
-The answer is kept on the service, so it is given once and everybody enrolling
-afterwards benefits. The person has to exist already: name a voice of theirs
-first.
-
-Example:
-  plaud speaker alias "Vic" "Victoria Dinie"`,
-	Args: cobra.ExactArgs(2),
-	RunE: func(cmd *cobra.Command, args []string) error {
-		spelling, name := args[0], strings.TrimSpace(args[1])
-		if err := requireFullName(name); err != nil {
-			return err
-		}
-
-		whisper, err := whisperClient()
-		if err != nil {
-			return err
-		}
-		if err := whisper.SetAlias(cmd.Context(), spelling, name); err != nil {
-			return err
-		}
-		fmt.Printf("Transcripts saying %q mean %q\n", spelling, name)
-		return nil
-	},
-}
-
 var speakerRenameCmd = &cobra.Command{
 	Use:   "rename <current-name> <first-last>",
 	Short: "Correct who somebody is",
@@ -267,7 +236,6 @@ func init() {
 	speakerListCmd.Flags().BoolVar(&speakerListLong, "long", false, "show the company and who added each person")
 
 	speakerCmd.AddCommand(speakerNameCmd)
-	speakerCmd.AddCommand(speakerAliasCmd)
 	speakerCmd.AddCommand(speakerRenameCmd)
 	speakerCmd.AddCommand(speakerForgetCmd)
 	speakerCmd.AddCommand(speakerListCmd)

@@ -80,14 +80,6 @@ class SpeakerStore:
                 created_at TEXT NOT NULL
             );
 
-            -- How transcripts spell somebody, which only a person who knows
-            -- them can answer, and which everybody then benefits from.
-            CREATE TABLE IF NOT EXISTS aliases (
-                spelling TEXT PRIMARY KEY,
-                person_id INTEGER NOT NULL REFERENCES people(id) ON DELETE CASCADE,
-                created_by TEXT NOT NULL,
-                created_at TEXT NOT NULL
-            );
         """)
 
     # -- people ----------------------------------------------------------
@@ -168,29 +160,6 @@ class SpeakerStore:
             (row["person_id"], display(row), _unpack(row["embedding"]))
             for row in rows
         ]
-
-    # -- aliases ---------------------------------------------------------
-
-    def set_alias(self, spelling: str, person_id: int, created_by: str) -> None:
-        now = datetime.now(timezone.utc).isoformat()
-        self._conn.execute(
-            """INSERT INTO aliases (spelling, person_id, created_by, created_at)
-               VALUES (?, ?, ?, ?)
-               ON CONFLICT(spelling) DO UPDATE SET person_id = excluded.person_id""",
-            (fold(spelling), person_id, created_by, now),
-        )
-        self._conn.commit()
-
-    def aliases(self) -> dict[str, str]:
-        """Every spelling mapped to the full name it stands for."""
-        rows = self._conn.execute("""
-            SELECT a.spelling, p.first_name, p.last_name
-            FROM aliases a JOIN people p ON p.id = a.person_id
-        """).fetchall()
-        return {
-            row["spelling"]: f"{row['first_name']} {row['last_name']}"
-            for row in rows
-        }
 
     # -- per-recording embeddings ---------------------------------------
 

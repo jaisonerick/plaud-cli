@@ -99,8 +99,7 @@ The store is shared by everyone signed in, which is why a lone first name is ref
 No voice ever leaves the service. An embedding that travelled would put people who never agreed to it on the laptop of everyone who transcribed a meeting they were in. What makes naming possible later is that a transcription's voices are keyed by the **Plaud recording id**, which the caller already knows and never has to write down.
 
 - `speaker name <recording-id> <label> "First Last" --company X` says who one of the voices is.
-- `speaker alias "<spelling>" "First Last"` records that transcripts spelling somebody "luca" or "Vic" mean that person. The answer lives on the service, so it is given once and everybody enrolling afterwards benefits.
-- `speaker enroll` learns from the Plaud transcripts that already name their speakers, resolving each spelling through those aliases and leaving out whoever is still unresolved.
+- `speaker enroll` learns from the Plaud transcripts that name their speakers in full, and leaves out whoever they name by a first name alone. Nothing mechanical turns "Tom" into Antonio Colombo, and there is no longer a dictionary that would: one person has one name. Whoever is left out is named from a recording instead, and is recognised by voice from then on however the transcript spelt them.
 - `speaker rename` corrects who somebody is, carrying their voices; `speaker forget` drops a person learned wrongly, which otherwise keeps claiming somebody else's voice in every transcription.
 
 Enrollment embeds with the model the diarization pipeline itself uses (`services/whisper/modal_whisper/embed.py`). Under any other model, enrolled and diarized voices land in different spaces, where nothing ever matches and nothing ever reports an error.

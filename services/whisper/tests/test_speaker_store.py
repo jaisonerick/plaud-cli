@@ -87,20 +87,6 @@ def test_forgetting_a_person_takes_their_voices(store):
     assert store.all_voices() == []
 
 
-def test_an_alias_resolves_to_the_full_name(store):
-    store.upsert_person("Victoria Dinie", "Dinie", "jaison@nexaedge.com")
-    person_id = store.person_id("victoria dinie")
-    store.set_alias("Vic", person_id, "jaison@nexaedge.com")
-    assert store.aliases() == {"vic": "Victoria Dinie"}
-
-
-def test_an_alias_cannot_outlive_its_person(store):
-    person_id = store.upsert_person("Victoria Dinie", "Dinie", "jaison@nexaedge.com")
-    store.set_alias("Vic", person_id, "jaison@nexaedge.com")
-    store.forget_person(person_id)
-    assert store.aliases() == {}
-
-
 def test_renaming_moves_the_voices_with_the_person(store):
     person_id = store.upsert_person("Mauricio Dinie", "Dinie", "jaison@nexaedge.com")
     store.add_voice(person_id, [0.5], "jaison@nexaedge.com")

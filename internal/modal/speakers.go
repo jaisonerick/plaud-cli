@@ -164,38 +164,6 @@ func (c *HTTPClient) RenamePerson(ctx context.Context, old, name, company string
 	return &result.Person, nil
 }
 
-// Aliases returns how transcripts spell people, mapped to their full names.
-func (c *HTTPClient) Aliases(ctx context.Context) (map[string]string, error) {
-	req, err := c.request(ctx, http.MethodGet, "/aliases", "", nil)
-	if err != nil {
-		return nil, err
-	}
-	aliases := map[string]string{}
-	if err := c.do(req, &aliases); err != nil {
-		return nil, err
-	}
-	return aliases, nil
-}
-
-// SetAlias records that transcripts calling somebody `spelling` mean `name`.
-func (c *HTTPClient) SetAlias(ctx context.Context, spelling, name string) error {
-	var buf bytes.Buffer
-	writer := multipart.NewWriter(&buf)
-	if err := writer.WriteField("spelling", spelling); err != nil {
-		return fmt.Errorf("writing spelling field: %w", err)
-	}
-	if err := writer.WriteField("name", name); err != nil {
-		return fmt.Errorf("writing name field: %w", err)
-	}
-	writer.Close()
-
-	req, err := c.request(ctx, http.MethodPost, "/aliases", writer.FormDataContentType(), &buf)
-	if err != nil {
-		return err
-	}
-	return c.do(req, nil)
-}
-
 // ForgetPerson drops a person and every voice of theirs.
 func (c *HTTPClient) ForgetPerson(ctx context.Context, name string) error {
 	var buf bytes.Buffer
