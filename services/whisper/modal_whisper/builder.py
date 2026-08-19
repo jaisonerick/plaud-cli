@@ -10,7 +10,7 @@ from .llm import LLMClient
 from .polish import Polisher
 from .segments import SegmentConverter
 from .speaker_match import SpeakerMatcher
-from .speaker_store import SpeakerStore
+from .speaker_store import DEFAULT_DB_PATH, SpeakerStore
 from .model import WhisperModel
 from .transcribe import TranscribeSession
 
@@ -42,7 +42,7 @@ class TranscriptionPipeline:
         self,
         whisper_model: WhisperModel,
         llm: LLMClient,
-        speaker_db_path: str = "/cache/speakers.db",
+        speaker_db_path: str = DEFAULT_DB_PATH,
     ):
         self._whisper_model = whisper_model
         self._llm = llm

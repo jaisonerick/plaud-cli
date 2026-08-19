@@ -21,8 +21,13 @@ image = (
 
 model_cache = modal.Volume.from_name("whisper-model-cache", create_if_missing=True)
 
+# The voices live apart from the model cache because only one of the two can be
+# reloaded: HuggingFace keeps a log file open under the model cache, and one
+# open file anywhere on a volume blocks reloading all of it.
+speaker_volume = modal.Volume.from_name("whisper-speakers", create_if_missing=True)
 
-def open_speaker_store():
+
+async def open_speaker_store():
     """Open the speaker database on the newest state of the volume.
 
     Each container keeps its own view of a volume, so a write from another one
@@ -32,7 +37,7 @@ def open_speaker_store():
     """
     from modal_whisper.speaker_store import SpeakerStore
 
-    model_cache.reload()
+    await speaker_volume.reload.aio()
     return SpeakerStore()
 
 
@@ -43,7 +48,7 @@ def open_speaker_store():
         modal.Secret.from_name("huggingface-secret"),
         modal.Secret.from_name("openrouter-secret"),
     ],
-    volumes={"/cache": model_cache},
+    volumes={"/cache": model_cache, "/speakers": speaker_volume},
     timeout=600,
     scaledown_window=120,
 )
@@ -104,7 +109,7 @@ class WhisperTranscriber:
                 compact_gap=opts_json.get("compact_gap", 2000),
             )
 
-            model_cache.reload()
+            await speaker_volume.reload.aio()
             pipeline = TranscriptionPipeline(self.whisper_model, self.llm)
 
             if stream:
@@ -124,14 +129,14 @@ class WhisperTranscriber:
                 )
             else:
                 result = pipeline.transcribe(audio_data, opts)
-                model_cache.commit()
+                await model_cache.commit.aio()
                 return JSONResponse(result)
 
         @web_app.put("/speakers/{audio_id}/{speaker_id}")
         async def set_speaker_name(
             audio_id: str, speaker_id: str, name: str = Form(...)
         ):
-            store = open_speaker_store()
+            store = await open_speaker_store()
             embedding = store.get_audio_speaker_info(audio_id, speaker_id)
             if embedding is None:
                 store.close()
@@ -142,7 +147,7 @@ class WhisperTranscriber:
 
             store.set_known_speaker(name, embedding)
             store.close()
-            model_cache.commit()
+            await speaker_volume.commit.aio()
             return {
                 "success": True,
                 "name": name,
@@ -152,7 +157,7 @@ class WhisperTranscriber:
 
         @web_app.get("/speakers")
         async def list_known_speakers():
-            store = open_speaker_store()
+            store = await open_speaker_store()
             counts = store.get_known_speaker_counts()
             store.close()
             return [{"name": name, "samples": n} for name, n in counts]
@@ -171,11 +176,11 @@ class WhisperTranscriber:
                     status_code=400, detail="embedding must be a non-empty array"
                 )
 
-            store = open_speaker_store()
+            store = await open_speaker_store()
             store.set_known_speaker(name, vector)
             samples = dict(store.get_known_speaker_counts()).get(name, 1)
             store.close()
-            model_cache.commit()
+            await speaker_volume.commit.aio()
             return {"name": name, "samples": samples}
 
         @web_app.post("/speakers/enroll")
@@ -191,7 +196,7 @@ class WhisperTranscriber:
             spec = json.loads(speakers)
             audio_array = load_audio(await audio.read())
 
-            store = open_speaker_store()
+            store = await open_speaker_store()
             enrolled, skipped = {}, {}
             try:
                 for entry in spec:
@@ -205,7 +210,7 @@ class WhisperTranscriber:
                     enrolled[name] = len(vector)
             finally:
                 store.close()
-            model_cache.commit()
+            await speaker_volume.commit.aio()
             return {"enrolled": enrolled, "skipped": skipped}
 
         return web_app

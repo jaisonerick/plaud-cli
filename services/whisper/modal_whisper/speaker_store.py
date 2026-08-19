@@ -3,10 +3,13 @@ import struct
 from datetime import datetime, timezone
 
 
+DEFAULT_DB_PATH = "/speakers/speakers.db"
+
+
 class SpeakerStore:
     """SQLite-backed storage for speaker embeddings on the Modal volume."""
 
-    def __init__(self, db_path: str = "/cache/speakers.db"):
+    def __init__(self, db_path: str = DEFAULT_DB_PATH):
         self.db_path = db_path
         self._conn = sqlite3.connect(db_path, timeout=10)
         self._conn.execute("PRAGMA journal_mode=WAL")
