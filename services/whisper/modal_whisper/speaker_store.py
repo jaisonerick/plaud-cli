@@ -26,16 +26,27 @@ def fold(text: str) -> str:
     return " ".join("".join(kept).split())
 
 
-def split_name(name: str) -> tuple[str, str]:
-    """Split a full name into the two parts a shared store keeps.
+def split_name(name: str, surname_unknown: bool = False) -> tuple[str, str]:
+    """Split a full name into the first name and everything that follows it.
 
-    Anything past the second word is dropped: what used to arrive there was a
-    company glued onto the name, and that has a column of its own now.
+    The rest is kept whole rather than trimmed to one word: "da Silva", "dos
+    Santos" and "La O" are surnames, not leftovers. What used to be trimmed
+    here was a company glued onto the name, and that has a column of its own.
+
+    A surname may be absent, but only when the caller says so: the point of
+    demanding one is to catch the "Amanda" typed without thinking, and an
+    unknown surname is a different thing from an unconsidered one.
     """
     parts = name.split()
-    if len(parts) < 2:
-        raise NotFull(f"{name!r} is a first name; give a first and last name")
-    return parts[0], parts[1]
+    if not parts:
+        raise NotFull("a name is required")
+    if len(parts) == 1:
+        if not surname_unknown:
+            raise NotFull(
+                f"{name!r} is a first name; give a surname, or say it is unknown"
+            )
+        return parts[0], ""
+    return parts[0], " ".join(parts[1:])
 
 
 class SpeakerStore:
@@ -84,13 +95,26 @@ class SpeakerStore:
 
     # -- people ----------------------------------------------------------
 
-    def upsert_person(self, name: str, company: str, created_by: str) -> int:
+    def upsert_person(
+        self, name: str, company: str, created_by: str, surname_unknown: bool = False
+    ) -> int:
         """Find the person by name, or record them. Returns their id."""
-        first, last = split_name(name)
+        first, last = split_name(name, surname_unknown)
         if not company.strip():
             raise NotFull("a company is required, so a transcript can always name one")
 
         key = fold(f"{first} {last}")
+        clash = self._conn.execute(
+            "SELECT company FROM people WHERE folded = ? AND company <> ?",
+            (key, company.strip()),
+        ).fetchone()
+        if clash and not last:
+            # Two people whose surname nobody wrote down are told apart by
+            # nothing at all; this is the moment somebody has to look one up.
+            raise NotFull(
+                f"another {first} is already known, at {clash['company']} — "
+                "a surname is needed to tell them apart"
+            )
         now = datetime.now(timezone.utc).isoformat()
         self._conn.execute(
             """INSERT INTO people (folded, first_name, last_name, company, created_by, created_at)
@@ -123,8 +147,10 @@ class SpeakerStore:
         """).fetchall()
         return [dict(row) for row in rows]
 
-    def rename_person(self, person_id: int, name: str, company: str) -> None:
-        first, last = split_name(name)
+    def rename_person(
+        self, person_id: int, name: str, company: str, surname_unknown: bool = False
+    ) -> None:
+        first, last = split_name(name, surname_unknown)
         self._conn.execute(
             "UPDATE people SET folded = ?, first_name = ?, last_name = ?, company = ? WHERE id = ?",
             (fold(f"{first} {last}"), first, last, company.strip(), person_id),
@@ -191,7 +217,8 @@ class SpeakerStore:
 
 def display(person) -> str:
     """How a person is written wherever anyone reads them."""
-    return f"{person['first_name']} {person['last_name']} ({person['company']})"
+    name = " ".join(filter(None, [person["first_name"], person["last_name"]]))
+    return f"{name} ({person['company']})"
 
 
 def _pack(vec: list[float]) -> bytes:

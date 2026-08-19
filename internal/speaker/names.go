@@ -39,7 +39,8 @@ func unaccent(r rune) rune {
 
 // IsFull reports whether a name identifies one person well enough to be shared
 // with whoever else uses the service. A lone first name does not: "Amanda" is
-// whichever Amanda the person writing it happened to mean.
+// whichever Amanda the person writing it happened to mean. Everything after
+// the first word is the surname, compound ones included.
 func IsFull(name string) bool {
 	return len(strings.Fields(Fold(name))) >= 2
 }

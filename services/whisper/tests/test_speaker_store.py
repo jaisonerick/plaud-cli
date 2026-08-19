@@ -41,9 +41,32 @@ def test_a_first_name_alone_is_refused():
         split_name("Amanda")
 
 
-def test_anything_past_the_second_word_is_dropped():
-    # What used to arrive there was a company glued onto the name.
-    assert split_name("Urias Hobaik - Afinz") == ("Urias", "Hobaik")
+def test_a_compound_surname_is_kept_whole():
+    # "da Silva" and "La O" are surnames. Trimming to one word mutilates the
+    # commonest shape a Brazilian name has.
+    assert split_name("Mauricio da Silva") == ("Mauricio", "da Silva")
+    assert split_name("Francesca La O") == ("Francesca", "La O")
+    assert split_name("Aline Mazzoni") == ("Aline", "Mazzoni")
+
+
+def test_a_surname_may_be_unknown_but_only_on_purpose():
+    with pytest.raises(NotFull):
+        split_name("Fabiana")
+    assert split_name("Fabiana", surname_unknown=True) == ("Fabiana", "")
+
+
+def test_somebody_without_a_surname_is_still_written_with_their_company(store):
+    store.upsert_person("Fabiana", "Accenture", "jaison@nexaedge.com", surname_unknown=True)
+    assert store.people()[0]["last_name"] == ""
+    person_id = store.person_id("Fabiana")
+    store.add_voice(person_id, [0.1], "jaison@nexaedge.com")
+    assert store.all_voices()[0][1] == "Fabiana (Accenture)"
+
+
+def test_a_second_nameless_person_has_to_be_told_apart(store):
+    store.upsert_person("Fabiana", "Accenture", "jaison@nexaedge.com", surname_unknown=True)
+    with pytest.raises(NotFull, match="surname is needed"):
+        store.upsert_person("Fabiana", "Outra", "jaison@nexaedge.com", surname_unknown=True)
 
 
 def test_a_person_needs_a_company(store):

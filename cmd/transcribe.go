@@ -166,7 +166,7 @@ Examples:
 					fmt.Fprintf(os.Stderr, "  Skipped %s: write %q as \"First Last (Company)\"\n", sid, typed)
 					return
 				}
-				saved, err := whisper.NameSpeaker(ctx, result.AudioID, sid, person, company)
+				saved, err := whisper.NameSpeaker(ctx, result.AudioID, sid, person, company, false)
 				if err != nil {
 					fmt.Fprintf(os.Stderr, "  Warning: could not register %s: %v\n", sid, err)
 					return

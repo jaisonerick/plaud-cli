@@ -8,6 +8,7 @@ import (
 	"io"
 	"mime/multipart"
 	"net/http"
+	"strconv"
 	"strings"
 )
 
@@ -29,9 +30,10 @@ func (p Person) Display() string {
 // SpeakerRanges are the stretches of one recording where a named person speaks,
 // in milliseconds.
 type SpeakerRanges struct {
-	Name    string   `json:"name"`
-	Company string   `json:"company"`
-	Ranges  [][2]int `json:"ranges"`
+	Name           string   `json:"name"`
+	Company        string   `json:"company"`
+	SurnameUnknown bool     `json:"surname_unknown,omitempty"`
+	Ranges         [][2]int `json:"ranges"`
 }
 
 // EnrollResult reports what an enrollment made of each name it was given.
@@ -75,14 +77,16 @@ func (c *HTTPClient) do(req *http.Request, out any) error {
 }
 
 // NameSpeaker gives a diarized voice a person, creating that person if needed.
-func (c *HTTPClient) NameSpeaker(ctx context.Context, audioID, speakerID, name, company string) (*Person, error) {
+func (c *HTTPClient) NameSpeaker(ctx context.Context, audioID, speakerID, name, company string, surnameUnknown bool) (*Person, error) {
 	var buf bytes.Buffer
 	writer := multipart.NewWriter(&buf)
-	if err := writer.WriteField("name", name); err != nil {
-		return nil, fmt.Errorf("writing name field: %w", err)
-	}
-	if err := writer.WriteField("company", company); err != nil {
-		return nil, fmt.Errorf("writing company field: %w", err)
+	for field, value := range map[string]string{
+		"name": name, "company": company,
+		"surname_unknown": strconv.FormatBool(surnameUnknown),
+	} {
+		if err := writer.WriteField(field, value); err != nil {
+			return nil, fmt.Errorf("writing %s field: %w", field, err)
+		}
 	}
 	writer.Close()
 
@@ -140,10 +144,13 @@ func (c *HTTPClient) EnrollSpeakers(ctx context.Context, audioData []byte, speak
 }
 
 // RenamePerson corrects who somebody is, carrying their voices across.
-func (c *HTTPClient) RenamePerson(ctx context.Context, old, name, company string) (*Person, error) {
+func (c *HTTPClient) RenamePerson(ctx context.Context, old, name, company string, surnameUnknown bool) (*Person, error) {
 	var buf bytes.Buffer
 	writer := multipart.NewWriter(&buf)
-	for field, value := range map[string]string{"old": old, "new": name, "company": company} {
+	for field, value := range map[string]string{
+		"old": old, "new": name, "company": company,
+		"surname_unknown": strconv.FormatBool(surnameUnknown),
+	} {
 		if err := writer.WriteField(field, value); err != nil {
 			return nil, fmt.Errorf("writing %s field: %w", field, err)
 		}

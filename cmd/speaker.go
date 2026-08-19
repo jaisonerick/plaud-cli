@@ -11,9 +11,11 @@ import (
 )
 
 var (
-	speakerCompany  string
-	renameCompany   string
-	speakerListLong bool
+	speakerCompany   string
+	renameCompany    string
+	speakerNoSurname bool
+	renameNoSurname  bool
+	speakerListLong  bool
 )
 
 var speakerCmd = &cobra.Command{
@@ -43,13 +45,12 @@ Example:
 		ctx := cmd.Context()
 		recordingID, label, name := args[0], args[1], strings.TrimSpace(args[2])
 
-		if err := requireFullName(name); err != nil {
+		if err := requireFullName(name, speakerNoSurname); err != nil {
 			return err
 		}
 		if strings.TrimSpace(speakerCompany) == "" {
 			return fmt.Errorf("--company is required, so a transcript can always name one")
 		}
-		warnIfTrimmed(name)
 
 		whisper, err := whisperClient()
 		if err != nil {
@@ -70,7 +71,7 @@ Example:
 			return err
 		}
 
-		person, err := whisper.NameSpeaker(ctx, recordingID, label, name, speakerCompany)
+		person, err := whisper.NameSpeaker(ctx, recordingID, label, name, speakerCompany, speakerNoSurname)
 		if err != nil {
 			return err
 		}
@@ -93,19 +94,18 @@ Example:
 	Args: cobra.ExactArgs(2),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		old, name := args[0], strings.TrimSpace(args[1])
-		if err := requireFullName(name); err != nil {
+		if err := requireFullName(name, renameNoSurname); err != nil {
 			return err
 		}
 		if strings.TrimSpace(renameCompany) == "" {
 			return fmt.Errorf("--company is required")
 		}
-		warnIfTrimmed(name)
 
 		whisper, err := whisperClient()
 		if err != nil {
 			return err
 		}
-		person, err := whisper.RenamePerson(cmd.Context(), old, name, renameCompany)
+		person, err := whisper.RenamePerson(cmd.Context(), old, name, renameCompany, renameNoSurname)
 		if err != nil {
 			return err
 		}
@@ -174,22 +174,16 @@ var speakerListCmd = &cobra.Command{
 
 // requireFullName keeps a lone first name out of a store shared with everyone
 // else using the service, where "Amanda" identifies nobody in particular.
-func requireFullName(name string) error {
+func requireFullName(name string, surnameUnknown bool) error {
 	if name == "" {
 		return fmt.Errorf("the name cannot be empty")
 	}
-	if !speaker.IsFull(name) {
-		return fmt.Errorf("%q is a first name — give a first and last name, so the person means the same to everyone using the service", name)
+	// Demanding a surname exists to catch the one typed without thinking. A
+	// surname nobody knows is a different thing, and saying so is the point.
+	if !speaker.IsFull(name) && !surnameUnknown {
+		return fmt.Errorf("%q is a first name — give a surname so the person means the same to everyone, or pass --surname-unknown", name)
 	}
 	return nil
-}
-
-// warnIfTrimmed says so when a name carries more than the two words kept.
-func warnIfTrimmed(name string) {
-	if parts := strings.Fields(name); len(parts) > 2 {
-		fmt.Fprintf(os.Stderr, "Keeping %q as %q; the rest belongs in --company.\n",
-			name, strings.Join(parts[:2], " "))
-	}
 }
 
 // confirmName asks before a new spelling of an existing person is created,
@@ -232,7 +226,9 @@ func confirmName(name string, existing []string) (string, error) {
 
 func init() {
 	speakerNameCmd.Flags().StringVar(&speakerCompany, "company", "", "the company this person is from (required)")
+	speakerNameCmd.Flags().BoolVar(&speakerNoSurname, "surname-unknown", false, "record somebody whose surname nobody knows; their company tells them apart")
 	speakerRenameCmd.Flags().StringVar(&renameCompany, "company", "", "the company this person is from (required)")
+	speakerRenameCmd.Flags().BoolVar(&renameNoSurname, "surname-unknown", false, "record somebody whose surname nobody knows")
 	speakerListCmd.Flags().BoolVar(&speakerListLong, "long", false, "show the company and who added each person")
 
 	speakerCmd.AddCommand(speakerNameCmd)

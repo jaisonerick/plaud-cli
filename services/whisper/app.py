@@ -194,6 +194,7 @@ class WhisperTranscriber:
             speaker_id: str,
             name: str = Form(...),
             company: str = Form(...),
+            surname_unknown: bool = Form(False),
             who: Identity = Depends(caller),
         ):
             """Give a diarized voice a person, creating that person if needed."""
@@ -216,7 +217,9 @@ class WhisperTranscriber:
                         )
                     raise HTTPException(status_code=404, detail=detail)
 
-                person_id = store.upsert_person(name, company, who.email)
+                person_id = store.upsert_person(
+                    name, company, who.email, surname_unknown
+                )
                 voices = store.add_voice(person_id, embedding, who.email)
                 person = store.person(person_id)
             except NotFull as err:
@@ -239,6 +242,7 @@ class WhisperTranscriber:
             old: str = Form(...),
             new: str = Form(...),
             company: str = Form(...),
+            surname_unknown: bool = Form(False),
             who: Identity = Depends(caller),
         ):
             """Correct who somebody is, or join two spellings of one person."""
@@ -249,7 +253,7 @@ class WhisperTranscriber:
                 person_id = store.person_id(old)
                 if person_id is None:
                     raise HTTPException(status_code=404, detail=f"nobody is called {old!r}")
-                store.rename_person(person_id, new, company)
+                store.rename_person(person_id, new, company, surname_unknown)
                 person = store.person(person_id)
             except NotFull as err:
                 raise HTTPException(status_code=400, detail=str(err)) from err
@@ -295,7 +299,10 @@ class WhisperTranscriber:
                     name = entry["name"]
                     try:
                         person_id = store.upsert_person(
-                            name, entry.get("company", ""), who.email
+                            name,
+                            entry.get("company", ""),
+                            who.email,
+                            entry.get("surname_unknown", False),
                         )
                     except NotFull as err:
                         skipped[name] = str(err)
