@@ -12,6 +12,7 @@ import (
 	"github.com/jaisonerick/plaud-cli/internal/api"
 	"github.com/jaisonerick/plaud-cli/internal/identify"
 	"github.com/jaisonerick/plaud-cli/internal/modal"
+	"github.com/jaisonerick/plaud-cli/internal/speaker"
 	"github.com/jaisonerick/plaud-cli/internal/transcript"
 	"github.com/spf13/cobra"
 )
@@ -156,13 +157,21 @@ Examples:
 		var wg sync.WaitGroup
 		for speakerID, name := range idResult.Names {
 			wg.Add(1)
-			go func(sid, n string) {
+			go func(sid, typed string) {
 				defer wg.Done()
-				if err := whisper.SetSpeakerName(ctx, result.AudioID, sid, n); err != nil {
-					fmt.Fprintf(os.Stderr, "  Warning: failed to register %s: %v\n", sid, err)
+				// The browser asks for a name; the convention is to type the
+				// same form a transcript shows, "First Last (Company)".
+				person, company := speaker.ParseDisplay(typed)
+				if company == "" {
+					fmt.Fprintf(os.Stderr, "  Skipped %s: write %q as \"First Last (Company)\"\n", sid, typed)
 					return
 				}
-				fmt.Fprintf(os.Stderr, "  Registered %q (%s)\n", n, sid)
+				saved, err := whisper.NameSpeaker(ctx, result.AudioID, sid, person, company)
+				if err != nil {
+					fmt.Fprintf(os.Stderr, "  Warning: could not register %s: %v\n", sid, err)
+					return
+				}
+				fmt.Fprintf(os.Stderr, "  Registered %s (%s)\n", saved.Display(), sid)
 			}(speakerID, name)
 		}
 		wg.Wait()

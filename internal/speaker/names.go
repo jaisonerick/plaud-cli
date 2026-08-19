@@ -44,6 +44,17 @@ func IsFull(name string) bool {
 	return len(strings.Fields(Fold(name))) >= 2
 }
 
+// ParseDisplay reads "First Last (Company)", the form a person is written in
+// everywhere they are read, back into its two parts.
+func ParseDisplay(text string) (name, company string) {
+	text = strings.TrimSpace(text)
+	open := strings.LastIndex(text, "(")
+	if open < 0 || !strings.HasSuffix(text, ")") {
+		return text, ""
+	}
+	return strings.TrimSpace(text[:open]), strings.TrimSpace(text[open+1 : len(text)-1])
+}
+
 // Match is an existing name that a new one may be another spelling of.
 type Match struct {
 	Name string

@@ -28,6 +28,17 @@ model_cache = modal.Volume.from_name("whisper-model-cache", create_if_missing=Tr
 speaker_volume = modal.Volume.from_name("whisper-speakers", create_if_missing=True)
 
 
+def _person_json(person: dict) -> dict:
+    """One shape for a person wherever this service returns one."""
+    return {
+        "name": f"{person['first_name']} {person['last_name']}",
+        "first_name": person["first_name"],
+        "last_name": person["last_name"],
+        "company": person["company"],
+        "created_by": person["created_by"],
+    }
+
+
 async def open_speaker_store():
     """Open the speaker database on the newest state of the volume.
 
@@ -178,104 +189,128 @@ class WhisperTranscriber:
                 return JSONResponse(result)
 
         @api.put("/speakers/{audio_id}/{speaker_id}")
-        async def set_speaker_name(
-            audio_id: str, speaker_id: str, name: str = Form(...)
+        async def name_speaker(
+            audio_id: str,
+            speaker_id: str,
+            name: str = Form(...),
+            company: str = Form(...),
+            who: Identity = Depends(caller),
         ):
-            store = await open_speaker_store()
-            embedding = store.get_audio_speaker_info(audio_id, speaker_id)
-            if embedding is None:
-                known = sorted(store.get_audio_embeddings(audio_id))
-                store.close()
-                if known:
-                    detail = (
-                        f"{audio_id} has no speaker {speaker_id!r}. "
-                        f"It has: {', '.join(known)}"
-                    )
-                else:
-                    detail = (
-                        f"nothing is stored for recording {audio_id} — "
-                        "transcribe it with diarization first"
-                    )
-                raise HTTPException(status_code=404, detail=detail)
+            """Give a diarized voice a person, creating that person if needed."""
+            from modal_whisper.speaker_store import NotFull
 
-            store.set_known_speaker(name, embedding)
-            store.close()
+            store = await open_speaker_store()
+            try:
+                embedding = store.get_audio_speaker_info(audio_id, speaker_id)
+                if embedding is None:
+                    known = sorted(store.get_audio_embeddings(audio_id))
+                    if known:
+                        detail = (
+                            f"{audio_id} has no speaker {speaker_id!r}. "
+                            f"It has: {', '.join(known)}"
+                        )
+                    else:
+                        detail = (
+                            f"nothing is stored for recording {audio_id} — "
+                            "transcribe it with diarization first"
+                        )
+                    raise HTTPException(status_code=404, detail=detail)
+
+                person_id = store.upsert_person(name, company, who.email)
+                voices = store.add_voice(person_id, embedding, who.email)
+                person = store.person(person_id)
+            except NotFull as err:
+                raise HTTPException(status_code=400, detail=str(err)) from err
+            finally:
+                store.close()
+
             await speaker_volume.commit.aio()
-            return {
-                "success": True,
-                "name": name,
-                "audio_id": audio_id,
-                "speaker_id": speaker_id,
-            }
+            return {"person": _person_json(person), "voices": voices}
 
         @api.get("/speakers")
-        async def list_known_speakers():
+        async def list_people():
             store = await open_speaker_store()
-            counts = store.get_known_speaker_counts()
+            people = store.people()
             store.close()
-            return [{"name": name, "samples": n} for name, n in counts]
-
-        @api.post("/speakers")
-        async def add_known_speaker(name: str = Form(...), embedding: str = Form(...)):
-            """Register a voice from an embedding the caller already holds.
-
-            This is what lets a speaker be named from a saved transcript: the
-            embedding rode along in the file, so there is nothing here to look
-            up and no audio to upload again.
-            """
-            vector = json.loads(embedding)
-            if not isinstance(vector, list) or not vector:
-                raise HTTPException(
-                    status_code=400, detail="embedding must be a non-empty array"
-                )
-
-            store = await open_speaker_store()
-            store.set_known_speaker(name, vector)
-            samples = dict(store.get_known_speaker_counts()).get(name, 1)
-            store.close()
-            await speaker_volume.commit.aio()
-            return {"name": name, "samples": samples}
+            return [_person_json(p) | {"voices": p["voices"]} for p in people]
 
         @api.patch("/speakers")
-        async def rename_known_speaker(old: str = Form(...), new: str = Form(...)):
-            """Move every sample of one spelling onto another.
+        async def rename_person(
+            old: str = Form(...),
+            new: str = Form(...),
+            company: str = Form(...),
+            who: Identity = Depends(caller),
+        ):
+            """Correct who somebody is, or join two spellings of one person."""
+            from modal_whisper.speaker_store import NotFull
 
-            Samples split across two spellings of one person can only be
-            rejoined by someone who knows they are the same person.
-            """
             store = await open_speaker_store()
-            moved = store.rename_known_speaker(old, new)
-            store.close()
-            if moved == 0:
-                raise HTTPException(status_code=404, detail=f"no speaker named {old!r}")
-            await speaker_volume.commit.aio()
-            return {"old": old, "new": new, "moved": moved}
+            try:
+                person_id = store.person_id(old)
+                if person_id is None:
+                    raise HTTPException(status_code=404, detail=f"nobody is called {old!r}")
+                store.rename_person(person_id, new, company)
+                person = store.person(person_id)
+            except NotFull as err:
+                raise HTTPException(status_code=400, detail=str(err)) from err
+            finally:
+                store.close()
 
-        # Spelled as a POST because the platform in front of this app answers a
-        # DELETE with 405 before it ever arrives, however the route is declared.
+            await speaker_volume.commit.aio()
+            return {"person": _person_json(person)}
+
         @api.post("/speakers/forget")
-        async def forget_known_speaker(name: str = Form(...)):
-            """Drop a voice, for when a wrong one was learned.
-
-            A sample attributed to the wrong person does not sit there inertly:
-            it is matched against every transcription from then on.
-            """
+        async def forget_person(name: str = Form(...)):
+            """Drop a person and every voice of theirs."""
             store = await open_speaker_store()
-            dropped = store.forget_known_speaker(name)
+            person_id = store.person_id(name)
+            if person_id is None:
+                store.close()
+                raise HTTPException(status_code=404, detail=f"nobody is called {name!r}")
+            store.forget_person(person_id)
             store.close()
-            if dropped == 0:
-                raise HTTPException(status_code=404, detail=f"no speaker named {name!r}")
             await speaker_volume.commit.aio()
-            return {"name": name, "dropped": dropped}
+            return {"name": name}
+
+        @api.get("/aliases")
+        async def list_aliases():
+            """How transcripts spell people, so a caller need not ask twice."""
+            store = await open_speaker_store()
+            aliases = store.aliases()
+            store.close()
+            return aliases
+
+        @api.post("/aliases")
+        async def set_alias(
+            spelling: str = Form(...),
+            name: str = Form(...),
+            who: Identity = Depends(caller),
+        ):
+            """Record that transcripts calling somebody `spelling` mean `name`."""
+            store = await open_speaker_store()
+            person_id = store.person_id(name)
+            if person_id is None:
+                store.close()
+                raise HTTPException(
+                    status_code=404,
+                    detail=f"nobody is called {name!r} yet — name a voice of theirs first",
+                )
+            store.set_alias(spelling, person_id, who.email)
+            store.close()
+            await speaker_volume.commit.aio()
+            return {"spelling": spelling, "name": name}
 
         @api.post("/speakers/enroll")
         async def enroll_speakers(
-            audio: UploadFile = File(...), speakers: str = Form(...)
+            audio: UploadFile = File(...),
+            speakers: str = Form(...),
+            who: Identity = Depends(caller),
         ):
-            """Register voices from a recording somebody already attributed.
+            """Learn voices from a recording somebody already attributed.
 
-            `speakers` is [{"name": str, "ranges": [[start_ms, end_ms], ...]}].
+            `speakers` is [{"name": str, "company": str, "ranges": [[ms, ms]]}].
             """
+            from modal_whisper.speaker_store import NotFull
             from modal_whisper.transcribe import load_audio
 
             spec = json.loads(speakers)
@@ -286,17 +321,25 @@ class WhisperTranscriber:
             try:
                 for entry in spec:
                     name = entry["name"]
+                    try:
+                        person_id = store.upsert_person(
+                            name, entry.get("company", ""), who.email
+                        )
+                    except NotFull as err:
+                        skipped[name] = str(err)
+                        continue
                     ranges = [(int(a), int(b)) for a, b in entry["ranges"]]
                     vector = self.embedder.embed(audio_array, ranges)
                     if vector is None:
                         skipped[name] = "too little speech to characterise a voice"
                         continue
-                    store.set_known_speaker(name, vector)
+                    store.add_voice(person_id, vector, who.email)
                     enrolled[name] = len(vector)
             finally:
                 store.close()
             await speaker_volume.commit.aio()
             return {"enrolled": enrolled, "skipped": skipped}
+
 
         web_app.include_router(api)
         return web_app

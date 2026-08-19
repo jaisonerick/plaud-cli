@@ -10,8 +10,6 @@ import (
 	"strings"
 	"sync"
 
-	"path/filepath"
-
 	"github.com/jaisonerick/plaud-cli/internal/api"
 	"github.com/jaisonerick/plaud-cli/internal/modal"
 	"github.com/jaisonerick/plaud-cli/internal/speaker"
@@ -26,6 +24,7 @@ var (
 	enrollYes           bool
 	enrollWorkers       int
 	enrollLimit         int
+	enrollCompany       string
 )
 
 // genericLabel matches the placeholder Plaud uses for a voice nobody named.
@@ -52,6 +51,10 @@ Examples:
 	RunE: func(cmd *cobra.Command, args []string) error {
 		ctx := cmd.Context()
 
+		if strings.TrimSpace(enrollCompany) == "" {
+			return fmt.Errorf("--company is required: a person the service does not know yet needs one")
+		}
+
 		whisper, err := whisperClient()
 		if err != nil {
 			return err
@@ -66,9 +69,9 @@ Examples:
 			return nil
 		}
 
-		known, err := whisper.ListKnownSpeakers(ctx)
+		known, err := whisper.ListPeople(ctx)
 		if err != nil {
-			return fmt.Errorf("listing known speakers: %w", err)
+			return fmt.Errorf("listing people: %w", err)
 		}
 		knownNames := make([]string, len(known))
 		for i, k := range known {
@@ -80,7 +83,7 @@ Examples:
 			return err
 		}
 
-		samples, incomplete, err := resolveFullNames(samples)
+		samples, incomplete, err := resolveFullNames(ctx, whisper, samples)
 		if err != nil {
 			return err
 		}
@@ -278,34 +281,23 @@ func askMerge(name string, samples []voiceSample, matches []speaker.Match) (stri
 	}
 }
 
-// aliasesPath is where the answers to "who is 'luca'?" are kept.
-func aliasesPath() (string, error) {
-	home, err := os.UserHomeDir()
+// resolveFullNames maps each spelling through the aliases the service holds
+// and sets aside whoever is still known only by a first name. The answers live
+// there so that one person answering "who is 'luca'?" answers it for everyone.
+func resolveFullNames(ctx context.Context, whisper *modal.HTTPClient, samples map[string][]voiceSample) (map[string][]voiceSample, []string, error) {
+	aliases, err := whisper.Aliases(ctx)
 	if err != nil {
-		return "", err
-	}
-	return filepath.Join(home, ".config", "plaud", speaker.AliasesFile), nil
-}
-
-// resolveFullNames maps each spelling through the aliases file and sets aside
-// whoever is still known only by a first name. The store is shared with anyone
-// else using the service, and "Amanda" there is whichever Amanda the person
-// who wrote it had in mind.
-func resolveFullNames(samples map[string][]voiceSample) (map[string][]voiceSample, []string, error) {
-	path, err := aliasesPath()
-	if err != nil {
-		return nil, nil, err
-	}
-	aliases, err := speaker.LoadAliases(path)
-	if err != nil {
-		return nil, nil, err
+		return nil, nil, fmt.Errorf("reading the spellings the service knows: %w", err)
 	}
 
 	full := map[string][]voiceSample{}
 	var incomplete []string
 
 	for name, found := range samples {
-		resolved := aliases.Resolve(name)
+		resolved := name
+		if mapped, ok := aliases[speaker.Fold(name)]; ok && mapped != "" {
+			resolved = mapped
+		}
 		if !speaker.IsFull(resolved) {
 			incomplete = append(incomplete, name)
 			continue
@@ -316,23 +308,13 @@ func resolveFullNames(samples map[string][]voiceSample) (map[string][]voiceSampl
 	return full, incomplete, nil
 }
 
-// reportIncomplete writes the names still owed a full spelling into the aliases
-// file, so answering them is editing one file rather than hunting transcripts.
+// reportIncomplete names who was left out and how to answer for them.
 func reportIncomplete(incomplete []string) error {
 	if len(incomplete) == 0 {
 		return nil
 	}
-	path, err := aliasesPath()
-	if err != nil {
-		return err
-	}
-	blank, err := speaker.WriteTemplate(path, incomplete)
-	if err != nil {
-		return err
-	}
-
 	fmt.Printf("\nLeft out, known only by a first name: %s\n", strings.Join(incomplete, ", "))
-	fmt.Printf("Write their full names into %s (%d still blank) and run this again.\n", path, blank)
+	fmt.Printf("Say who they are with 'plaud speaker alias \"<spelling>\" \"First Last\"', then run this again.\n")
 	return nil
 }
 
@@ -421,7 +403,7 @@ func enrollRecordings(ctx context.Context, whisper *modal.HTTPClient, byRecordin
 		specs := make([]modal.SpeakerRanges, len(group))
 		for j, s := range group {
 			names[j] = s.name
-			specs[j] = modal.SpeakerRanges{Name: s.name, Ranges: s.ranges}
+			specs[j] = modal.SpeakerRanges{Name: s.name, Company: enrollCompany, Ranges: s.ranges}
 		}
 
 		fmt.Printf("\n[%d/%d] %s\n  %s\n", i+1, len(ids), truncate(group[0].recordingName, 70), strings.Join(names, ", "))
@@ -494,4 +476,5 @@ func init() {
 	speakerEnrollCmd.Flags().BoolVar(&enrollYes, "yes", false, "merge every name that resembles a known one, without asking")
 	speakerEnrollCmd.Flags().IntVar(&enrollWorkers, "workers", 6, "how many transcripts to read at once")
 	speakerEnrollCmd.Flags().IntVar(&enrollLimit, "limit", 0, "process at most this many recordings, richest first (0 for all)")
+	speakerEnrollCmd.Flags().StringVar(&enrollCompany, "company", "", "company to record for people the service does not know yet (required)")
 }

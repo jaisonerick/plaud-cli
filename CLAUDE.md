@@ -90,23 +90,22 @@ The GPU container is scaled to zero between jobs, so every run pays a cold start
 
 ## Speaker Recognition
 
-Diarization separates voices and calls them `SPEAKER_00`, `SPEAKER_01`. Recognition turns those into names, by comparing each voice against samples of people already learned.
+Diarization separates voices and calls them `SPEAKER_00`, `SPEAKER_01`. Recognition turns those into people, by comparing each voice against ones already learned.
 
-No voice ever leaves the service. The store is shared, so an embedding that travelled would put people who never agreed to it on the laptop of everyone who transcribed a meeting they were in.
+A person is a **first name, a last name and a company**, and is written everywhere as `First Last (Company)` — which is the form transcripts carry. Anything past the second word of a name is dropped: what used to arrive there was a company glued on, and it has a field of its own now. Every person also records **who added them**, the Google account that did it.
 
-What makes naming possible later is that the service keys a transcription's voices by the **Plaud recording id** — the same id `plaud list` prints. Nothing has to be written down on the way, because the caller already knows it.
+The store is shared by everyone signed in, which is why a lone first name is refused: "Amanda" names whichever Amanda the person typing had in mind. `people.folded` is UNIQUE, so a second spelling of one person cannot be created at all — every previous guard against that was a convention, and conventions are what split them.
 
-- `speaker enroll` learns from the Plaud transcripts that already name their speakers, which is the one bulk source of labelled voice this account has. It reads every transcript, picks the recordings where each person speaks most, and sends only those stretches.
-- `speaker name <recording-id> <label> <name>` names one voice of a recording that was transcribed.
-- `speaker rename` moves the samples of one spelling onto another; `speaker forget` drops a voice learned from the wrong person, which otherwise keeps claiming somebody else's in every transcription that follows.
+No voice ever leaves the service. An embedding that travelled would put people who never agreed to it on the laptop of everyone who transcribed a meeting they were in. What makes naming possible later is that a transcription's voices are keyed by the **Plaud recording id**, which the caller already knows and never has to write down.
 
-The store holds full names only. A lone first name identifies whichever Amanda the person typing it had in mind, and the store is shared with everyone using the service, so `speaker name` and `speaker rename` refuse anything shorter and `speaker list` marks the ones already stored that way.
-
-Transcripts call people whatever the person typing felt like, and only somebody who knows them can say who "luca" or "Vic" is. `~/.config/plaud/speaker-names.json` maps those spellings to full names; `speaker enroll` reads it, leaves out whoever is still unresolved, and writes the outstanding ones back into that file to be filled in.
-
-A new name is also checked against the known ones before being created. Two spellings of one person are two people to everything mechanical, and the samples they split can only be rejoined by `speaker rename`.
+- `speaker name <recording-id> <label> "First Last" --company X` says who one of the voices is.
+- `speaker alias "<spelling>" "First Last"` records that transcripts spelling somebody "luca" or "Vic" mean that person. The answer lives on the service, so it is given once and everybody enrolling afterwards benefits.
+- `speaker enroll` learns from the Plaud transcripts that already name their speakers, resolving each spelling through those aliases and leaving out whoever is still unresolved.
+- `speaker rename` corrects who somebody is, carrying their voices; `speaker forget` drops a person learned wrongly, which otherwise keeps claiming somebody else's voice in every transcription.
 
 Enrollment embeds with the model the diarization pipeline itself uses (`services/whisper/modal_whisper/embed.py`). Under any other model, enrolled and diarized voices land in different spaces, where nothing ever matches and nothing ever reports an error.
+
+`fold` exists twice, in `internal/speaker/names.go` and `services/whisper/modal_whisper/speaker_store.py`, and the two must agree: one decides what name to offer, the other what is stored, and a disagreement is a person who cannot be found under the name they were saved with. Both are tested against the same cases.
 
 The voices live in a SQLite file on a Modal volume, and a container serves whatever view of that volume it last loaded. Writing without reloading first publishes the database as it looked before someone else's write, undoing it while reporting success. Every path that touches a voice goes through `open_speaker_store()` for that reason.
 
@@ -115,7 +114,6 @@ The voices live in a SQLite file on a Modal volume, and a container serves whate
 All stored in `~/.config/plaud/` with 0600 permissions:
 - `token.json` — Plaud auth token and device ID
 - `auth.json` — the Google sign-in for the transcription service (0600; a refresh token is worth the account)
-- `speaker-names.json` — full names for the spellings transcripts use
 - `sync-state.json` — Incremental sync tracking
 - `update-state.json` — Version check cache
 - `cache/transcripts/` — Local transcript cache

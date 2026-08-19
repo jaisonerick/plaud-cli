@@ -80,3 +80,18 @@ func TestIsFullWantsMoreThanAFirstName(t *testing.T) {
 		}
 	}
 }
+
+func TestParseDisplayReadsBackWhatATranscriptShows(t *testing.T) {
+	for _, tc := range []struct{ in, name, company string }{
+		{"Jaison Erick (NexaEdge)", "Jaison Erick", "NexaEdge"},
+		{"  Aline Mazzoni (Mevo)  ", "Aline Mazzoni", "Mevo"},
+		{"Urias Hobaik (Afinz Pagamentos)", "Urias Hobaik", "Afinz Pagamentos"},
+		{"Jaison Erick", "Jaison Erick", ""},
+		{"SPEAKER_01", "SPEAKER_01", ""},
+	} {
+		name, company := ParseDisplay(tc.in)
+		if name != tc.name || company != tc.company {
+			t.Errorf("ParseDisplay(%q) = %q, %q; want %q, %q", tc.in, name, company, tc.name, tc.company)
+		}
+	}
+}

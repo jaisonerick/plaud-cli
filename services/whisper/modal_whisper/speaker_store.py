@@ -1,18 +1,52 @@
 import sqlite3
 import struct
+import unicodedata
 from datetime import datetime, timezone
-
 
 DEFAULT_DB_PATH = "/speakers/speakers.db"
 
 
+class NotFull(Exception):
+    """A name that does not identify one person to everybody."""
+
+
+def fold(text: str) -> str:
+    """Reduce a name to what two spellings of the same thing share.
+
+    Must agree with Fold in internal/speaker/names.go: the client decides what
+    to offer and this decides what is stored, and a disagreement shows up as a
+    person who cannot be found under the name they were saved with.
+    """
+    stripped = unicodedata.normalize("NFKD", text.lower())
+    kept = [
+        " " if c in "-_" or c.isspace() else c
+        for c in stripped
+        if c.isalnum() or c.isspace() or c in "-_"
+    ]
+    return " ".join("".join(kept).split())
+
+
+def split_name(name: str) -> tuple[str, str]:
+    """Split a full name into the two parts a shared store keeps.
+
+    Anything past the second word is dropped: what used to arrive there was a
+    company glued onto the name, and that has a column of its own now.
+    """
+    parts = name.split()
+    if len(parts) < 2:
+        raise NotFull(f"{name!r} is a first name; give a first and last name")
+    return parts[0], parts[1]
+
+
 class SpeakerStore:
-    """SQLite-backed storage for speaker embeddings on the Modal volume."""
+    """The people this service recognises, and the voices it knows them by."""
 
     def __init__(self, db_path: str = DEFAULT_DB_PATH):
         self.db_path = db_path
         self._conn = sqlite3.connect(db_path, timeout=10)
+        self._conn.row_factory = sqlite3.Row
         self._conn.execute("PRAGMA journal_mode=WAL")
+        self._conn.execute("PRAGMA foreign_keys=ON")
         self._ensure_tables()
 
     def _ensure_tables(self):
@@ -24,13 +58,141 @@ class SpeakerStore:
                 created_at TEXT NOT NULL,
                 PRIMARY KEY (audio_id, speaker_id)
             );
-            CREATE TABLE IF NOT EXISTS known_speakers (
+
+            -- folded is UNIQUE so that a second spelling of one person cannot
+            -- be created at all. Every other guard against that has been a
+            -- convention, and conventions are what split them in the first place.
+            CREATE TABLE IF NOT EXISTS people (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
-                name TEXT NOT NULL,
+                folded TEXT NOT NULL UNIQUE,
+                first_name TEXT NOT NULL,
+                last_name TEXT NOT NULL,
+                company TEXT NOT NULL,
+                created_by TEXT NOT NULL,
+                created_at TEXT NOT NULL
+            );
+
+            CREATE TABLE IF NOT EXISTS voices (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                person_id INTEGER NOT NULL REFERENCES people(id) ON DELETE CASCADE,
                 embedding BLOB NOT NULL,
+                created_by TEXT NOT NULL,
+                created_at TEXT NOT NULL
+            );
+
+            -- How transcripts spell somebody, which only a person who knows
+            -- them can answer, and which everybody then benefits from.
+            CREATE TABLE IF NOT EXISTS aliases (
+                spelling TEXT PRIMARY KEY,
+                person_id INTEGER NOT NULL REFERENCES people(id) ON DELETE CASCADE,
+                created_by TEXT NOT NULL,
                 created_at TEXT NOT NULL
             );
         """)
+
+    # -- people ----------------------------------------------------------
+
+    def upsert_person(self, name: str, company: str, created_by: str) -> int:
+        """Find the person by name, or record them. Returns their id."""
+        first, last = split_name(name)
+        if not company.strip():
+            raise NotFull("a company is required, so a transcript can always name one")
+
+        key = fold(f"{first} {last}")
+        now = datetime.now(timezone.utc).isoformat()
+        self._conn.execute(
+            """INSERT INTO people (folded, first_name, last_name, company, created_by, created_at)
+               VALUES (?, ?, ?, ?, ?, ?)
+               ON CONFLICT(folded) DO UPDATE SET company = excluded.company""",
+            (key, first, last, company.strip(), created_by, now),
+        )
+        self._conn.commit()
+        return self.person_id(f"{first} {last}")
+
+    def person_id(self, name: str) -> int | None:
+        row = self._conn.execute(
+            "SELECT id FROM people WHERE folded = ?", (fold(name),)
+        ).fetchone()
+        return row["id"] if row else None
+
+    def person(self, person_id: int) -> dict | None:
+        row = self._conn.execute(
+            "SELECT * FROM people WHERE id = ?", (person_id,)
+        ).fetchone()
+        return dict(row) if row else None
+
+    def people(self) -> list[dict]:
+        """Everybody known, with how many voices back them."""
+        rows = self._conn.execute("""
+            SELECT p.*, COUNT(v.id) AS voices
+            FROM people p LEFT JOIN voices v ON v.person_id = p.id
+            GROUP BY p.id
+            ORDER BY p.first_name, p.last_name
+        """).fetchall()
+        return [dict(row) for row in rows]
+
+    def rename_person(self, person_id: int, name: str, company: str) -> None:
+        first, last = split_name(name)
+        self._conn.execute(
+            "UPDATE people SET folded = ?, first_name = ?, last_name = ?, company = ? WHERE id = ?",
+            (fold(f"{first} {last}"), first, last, company.strip(), person_id),
+        )
+        self._conn.commit()
+
+    def forget_person(self, person_id: int) -> int:
+        cursor = self._conn.execute("DELETE FROM people WHERE id = ?", (person_id,))
+        self._conn.commit()
+        return cursor.rowcount
+
+    # -- voices ----------------------------------------------------------
+
+    def add_voice(self, person_id: int, embedding: list[float], created_by: str) -> int:
+        now = datetime.now(timezone.utc).isoformat()
+        self._conn.execute(
+            "INSERT INTO voices (person_id, embedding, created_by, created_at) VALUES (?, ?, ?, ?)",
+            (person_id, _pack(embedding), created_by, now),
+        )
+        self._conn.commit()
+        row = self._conn.execute(
+            "SELECT COUNT(*) AS n FROM voices WHERE person_id = ?", (person_id,)
+        ).fetchone()
+        return row["n"]
+
+    def all_voices(self) -> list[tuple[int, str, list[float]]]:
+        """Every voice as (person_id, display name, embedding), for matching."""
+        rows = self._conn.execute("""
+            SELECT v.person_id, p.first_name, p.last_name, p.company, v.embedding
+            FROM voices v JOIN people p ON p.id = v.person_id
+        """).fetchall()
+        return [
+            (row["person_id"], display(row), _unpack(row["embedding"]))
+            for row in rows
+        ]
+
+    # -- aliases ---------------------------------------------------------
+
+    def set_alias(self, spelling: str, person_id: int, created_by: str) -> None:
+        now = datetime.now(timezone.utc).isoformat()
+        self._conn.execute(
+            """INSERT INTO aliases (spelling, person_id, created_by, created_at)
+               VALUES (?, ?, ?, ?)
+               ON CONFLICT(spelling) DO UPDATE SET person_id = excluded.person_id""",
+            (fold(spelling), person_id, created_by, now),
+        )
+        self._conn.commit()
+
+    def aliases(self) -> dict[str, str]:
+        """Every spelling mapped to the full name it stands for."""
+        rows = self._conn.execute("""
+            SELECT a.spelling, p.first_name, p.last_name
+            FROM aliases a JOIN people p ON p.id = a.person_id
+        """).fetchall()
+        return {
+            row["spelling"]: f"{row['first_name']} {row['last_name']}"
+            for row in rows
+        }
+
+    # -- per-recording embeddings ---------------------------------------
 
     def save_audio_embeddings(self, audio_id: str, embeddings: dict[str, list[float]]):
         now = datetime.now(timezone.utc).isoformat()
@@ -45,54 +207,22 @@ class SpeakerStore:
             "SELECT speaker_id, embedding FROM audio_embeddings WHERE audio_id = ?",
             (audio_id,),
         ).fetchall()
-        return {sid: _unpack(blob) for sid, blob in rows}
+        return {row["speaker_id"]: _unpack(row["embedding"]) for row in rows}
 
     def get_audio_speaker_info(self, audio_id: str, speaker_id: str) -> list[float] | None:
         row = self._conn.execute(
             "SELECT embedding FROM audio_embeddings WHERE audio_id = ? AND speaker_id = ?",
             (audio_id, speaker_id),
         ).fetchone()
-        return _unpack(row[0]) if row else None
-
-    def set_known_speaker(self, name: str, embedding: list[float]):
-        """Add a new embedding sample for a known speaker."""
-        now = datetime.now(timezone.utc).isoformat()
-        self._conn.execute(
-            "INSERT INTO known_speakers (name, embedding, created_at) VALUES (?, ?, ?)",
-            (name, _pack(embedding), now),
-        )
-        self._conn.commit()
-
-    def get_all_known_speakers(self) -> list[tuple[int, str, list[float]]]:
-        """Return all known speaker samples as (id, name, embedding)."""
-        rows = self._conn.execute("SELECT id, name, embedding FROM known_speakers").fetchall()
-        return [(row_id, name, _unpack(blob)) for row_id, name, blob in rows]
-
-    def rename_known_speaker(self, old: str, new: str) -> int:
-        """Move every sample of one name onto another. Returns how many moved."""
-        cursor = self._conn.execute(
-            "UPDATE known_speakers SET name = ? WHERE name = ?", (new, old)
-        )
-        self._conn.commit()
-        return cursor.rowcount
-
-    def forget_known_speaker(self, name: str) -> int:
-        """Drop every sample of a name. Returns how many were dropped."""
-        cursor = self._conn.execute(
-            "DELETE FROM known_speakers WHERE name = ?", (name,)
-        )
-        self._conn.commit()
-        return cursor.rowcount
-
-    def get_known_speaker_counts(self) -> list[tuple[str, int]]:
-        """Return each known speaker with how many samples back it, commonest first."""
-        rows = self._conn.execute(
-            "SELECT name, COUNT(*) FROM known_speakers GROUP BY name ORDER BY COUNT(*) DESC, name"
-        ).fetchall()
-        return [(name, count) for name, count in rows]
+        return _unpack(row["embedding"]) if row else None
 
     def close(self):
         self._conn.close()
+
+
+def display(person) -> str:
+    """How a person is written wherever anyone reads them."""
+    return f"{person['first_name']} {person['last_name']} ({person['company']})"
 
 
 def _pack(vec: list[float]) -> bytes:

@@ -171,7 +171,7 @@ class TranscriptionPipeline:
 
             if opts.speaker_recognition:
                 yield _update("speaker_recognition", "started")
-                known = store.get_all_known_speakers()
+                known = store.all_voices()
                 matcher = SpeakerMatcher(known, opts.speaker_threshold)
                 speaker_map = matcher.match(speaker_embeddings)
                 matched = sum(1 for k, v in speaker_map.items() if k != v)
