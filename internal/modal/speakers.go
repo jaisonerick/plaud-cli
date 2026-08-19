@@ -38,8 +38,9 @@ func (c *HTTPClient) request(ctx context.Context, method, path, contentType stri
 	if contentType != "" {
 		req.Header.Set("Content-Type", contentType)
 	}
-	req.Header.Set("Modal-Key", c.TokenID)
-	req.Header.Set("Modal-Secret", c.TokenSecret)
+	if err := c.authorize(ctx, req); err != nil {
+		return nil, err
+	}
 	return req, nil
 }
 

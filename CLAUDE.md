@@ -50,9 +50,7 @@ PLAUD_DEVICE_ID        Device ID sent as x-device-id (derived from the token whe
 PLAUD_PASSWORD         Password for `login --password`, instead of the prompt
 PLAUD_API_URL          Override API endpoint
 ANTHROPIC_API_KEY      Claude API key (ask/summarize commands)
-MODAL_TOKEN_ID         Modal auth (or use `plaud modal-auth`)
-MODAL_TOKEN_SECRET     Modal auth (or use `plaud modal-auth`)
-MODAL_ENDPOINT_URL     Web endpoint of the deployed Whisper service
+PLAUD_WHISPER_URL      Override the transcription service endpoint
 PLAUD_EMAIL            Non-interactive `login`: email to send the code to
 PLAUD_CODE             Non-interactive `login`: the emailed code
 PLAUD_OTP_TOKEN        Non-interactive `login`: the OTP token from the send step
@@ -72,6 +70,14 @@ Accounts created through Google, Apple or Microsoft SSO have no password until o
 
 `/auth/access-token` also returns a `refresh_token` and expiry fields, which this client currently ignores. Access tokens last months and nothing here renews them.
 
+## Using the Transcription Service
+
+The service is shared, and a Google account is the whole of what gets a person in: no account on the cloud it runs on, no keys to hand over. `plaud auth login` opens a browser once and keeps a refresh token; every request carries a Google identity token, which the service verifies before it does anything.
+
+Only accounts on the domains in `services/whisper/modal_whisper/auth.py` are served. That list is the entire defence, because the endpoint itself answers anyone who knows the URL: it runs a GPU somebody pays for and writes into a store everyone shares.
+
+`GET /auth/config` is the one route outside the guest list, since a caller needs it before it can have a token. Every other route hangs off a router that carries the check, so a route added later cannot forget it.
+
 ## Transcription
 
 Plaud issues no new transcripts for this account, so Whisper on Modal is the only thing here that turns audio into text. `transcribe` always goes to Whisper. `sync` and `download` prefer a transcript Plaud already holds and fall back to Whisper for the rest, which `--whisper=false` turns off.
@@ -86,11 +92,12 @@ The GPU container is scaled to zero between jobs, so every run pays a cold start
 
 Diarization separates voices and calls them `SPEAKER_00`, `SPEAKER_01`. Recognition turns those into names, by comparing each voice against samples of people already learned.
 
-Every Whisper transcription writes a `.speakers.json` beside it, holding the embedding of each label. That file is what lets a speaker be named from a transcript found on disk weeks later: the voice travels with the transcript, so naming needs no audio and nothing kept on the server.
+No voice ever leaves the service. The store is shared, so an embedding that travelled would put people who never agreed to it on the laptop of everyone who transcribed a meeting they were in.
+
+What makes naming possible later is that the service keys a transcription's voices by the **Plaud recording id** — the same id `plaud list` prints. Nothing has to be written down on the way, because the caller already knows it.
 
 - `speaker enroll` learns from the Plaud transcripts that already name their speakers, which is the one bulk source of labelled voice this account has. It reads every transcript, picks the recordings where each person speaks most, and sends only those stretches.
-- `speaker name <transcript> <label> <name>` names one voice from a saved transcript and its speaker file.
-- `speaker set` names one the server still holds an embedding for, and stops working once it no longer does.
+- `speaker name <recording-id> <label> <name>` names one voice of a recording that was transcribed.
 - `speaker rename` moves the samples of one spelling onto another; `speaker forget` drops a voice learned from the wrong person, which otherwise keeps claiming somebody else's in every transcription that follows.
 
 The store holds full names only. A lone first name identifies whichever Amanda the person typing it had in mind, and the store is shared with everyone using the service, so `speaker name` and `speaker rename` refuse anything shorter and `speaker list` marks the ones already stored that way.
@@ -106,9 +113,10 @@ The voices live in a SQLite file on a Modal volume, and a container serves whate
 ## Config Files
 
 All stored in `~/.config/plaud/` with 0600 permissions:
-- `token.json` — Auth token, device ID, Modal credentials
+- `token.json` — Plaud auth token and device ID
+- `auth.json` — the Google sign-in for the transcription service (0600; a refresh token is worth the account)
+- `speaker-names.json` — full names for the spellings transcripts use
 - `sync-state.json` — Incremental sync tracking
 - `update-state.json` — Version check cache
 - `cache/transcripts/` — Local transcript cache
 
-A transcript's speakers live beside the transcript, not here: `transcript.md` is accompanied by `transcript.speakers.json`.

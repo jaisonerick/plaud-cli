@@ -5,18 +5,37 @@ import (
 	"fmt"
 	"io"
 
+	"github.com/jaisonerick/plaud-cli/internal/auth"
 	"github.com/jaisonerick/plaud-cli/internal/modal"
 	"github.com/jaisonerick/plaud-cli/internal/progress"
-	"github.com/jaisonerick/plaud-cli/internal/transcript"
 )
 
-// whisperClient resolves the Modal credentials that transcription needs.
+// whisperClient builds a client that signs each request with the Google
+// account this machine signed in as. The token is fetched once per run and
+// held here, so a command making several calls signs in once.
 func whisperClient() (*modal.HTTPClient, error) {
-	c := modal.LoadHTTPClient(cfg.ModalTokenID, cfg.ModalTokenSecret, cfg.ModalEndpointURL)
-	if c == nil {
-		return nil, fmt.Errorf("Modal not configured — run 'plaud modal-auth', or set MODAL_TOKEN_ID, MODAL_TOKEN_SECRET and MODAL_ENDPOINT_URL")
+	session, err := auth.LoadSession()
+	if err != nil {
+		return nil, err
 	}
-	return c, nil
+	if session == nil || session.RefreshToken == "" {
+		return nil, fmt.Errorf("not signed in — run 'plaud auth login'")
+	}
+
+	var cached string
+	token := func(ctx context.Context) (string, error) {
+		if cached != "" {
+			return cached, nil
+		}
+		config, err := auth.FetchConfig(ctx, whisperEndpoint())
+		if err != nil {
+			return "", err
+		}
+		cached, err = auth.IDToken(ctx, config, session)
+		return cached, err
+	}
+
+	return modal.NewHTTPClient(cfg.WhisperURL, token), nil
 }
 
 // whisperDefaults are the options for a transcription nobody configured, which
@@ -75,6 +94,7 @@ func whisperTranscribe(ctx context.Context, w io.Writer, whisper *modal.HTTPClie
 	// moment we can prove it woke up.
 	tracker.Update(progress.Event{Stage: "upload", Status: "started"})
 
+	opts.RecordingID = id
 	events, errCh := whisper.TranscribeStream(ctx, audioData, opts, modal.StreamCallbacks{})
 
 	var result *modal.TranscribeResult
@@ -118,15 +138,8 @@ func whisperTranscribe(ctx context.Context, w io.Writer, whisper *modal.HTTPClie
 	return result, audioData, nil
 }
 
-// saveWhisperTranscript writes a transcript and, beside it, the voices that
-// spoke it. The embeddings ride along so that naming a speaker later needs
-// only the saved file — no audio to send again, nothing kept on the server.
+// saveWhisperTranscript writes a transcript. The voices that spoke it stay on
+// the server, which knows them by the recording they came from.
 func saveWhisperTranscript(result *modal.TranscribeResult, format, dest string) error {
-	if err := saveTranscript(result.Segments, format, dest); err != nil {
-		return err
-	}
-	return transcript.WriteSpeakerFile(
-		transcript.SpeakerSidecarPath(dest),
-		transcript.NewSpeakerFile(result.AudioID, result.Speakers, result.Embeddings),
-	)
+	return saveTranscript(result.Segments, format, dest)
 }

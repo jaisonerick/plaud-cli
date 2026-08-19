@@ -16,40 +16,45 @@ import (
 	"github.com/jaisonerick/plaud-cli/internal/transcript"
 )
 
-// HTTPClient handles communication with the Modal FastAPI endpoint.
+// DefaultEndpoint is the shared service. It is built in because using it
+// should need nothing but a Google account: no URL to be told, no credential
+// from the cloud it happens to run on.
+const DefaultEndpoint = "https://jaisonerick--modal-whisper.modal.run"
+
+// HTTPClient handles communication with the Whisper service.
 type HTTPClient struct {
 	EndpointURL string
-	TokenID     string
-	TokenSecret string
 	HTTP        *http.Client
+
+	// Token proves who is calling. It is a function because the identity is
+	// refreshed per run, and because nothing here should hold a credential.
+	Token func(ctx context.Context) (string, error)
 }
 
-// LoadHTTPClient creates an HTTPClient from environment variables and saved config.
-func LoadHTTPClient(savedTokenID, savedTokenSecret, savedEndpoint string) *HTTPClient {
-	tokenID := os.Getenv("MODAL_TOKEN_ID")
-	tokenSecret := os.Getenv("MODAL_TOKEN_SECRET")
-	endpoint := os.Getenv("MODAL_ENDPOINT_URL")
+// authorize puts the caller's identity on a request.
+func (c *HTTPClient) authorize(ctx context.Context, req *http.Request) error {
+	if c.Token == nil {
+		return fmt.Errorf("not signed in — run 'plaud auth login'")
+	}
+	token, err := c.Token(ctx)
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Authorization", "Bearer "+token)
+	return nil
+}
 
-	if tokenID == "" {
-		tokenID = savedTokenID
-	}
-	if tokenSecret == "" {
-		tokenSecret = savedTokenSecret
-	}
+// NewHTTPClient points at the service, letting the environment or saved config
+// override where that is.
+func NewHTTPClient(savedEndpoint string, token func(ctx context.Context) (string, error)) *HTTPClient {
+	endpoint := os.Getenv("PLAUD_WHISPER_URL")
 	if endpoint == "" {
 		endpoint = savedEndpoint
 	}
-
-	if tokenID == "" || tokenSecret == "" || endpoint == "" {
-		return nil
+	if endpoint == "" {
+		endpoint = DefaultEndpoint
 	}
-
-	return &HTTPClient{
-		EndpointURL: endpoint,
-		TokenID:     tokenID,
-		TokenSecret: tokenSecret,
-		HTTP:        &http.Client{},
-	}
+	return &HTTPClient{EndpointURL: endpoint, HTTP: &http.Client{}, Token: token}
 }
 
 // TranscribeOpts holds options for the transcription request.
@@ -60,16 +65,16 @@ type TranscribeOpts struct {
 	CompactGap         int     `json:"compact_gap"`
 	Language           string  `json:"language,omitempty"`
 	ContextDoc         string  `json:"context_doc,omitempty"`
+	RecordingID        string  `json:"recording_id,omitempty"`
 	SpeakerRecognition bool    `json:"speaker_recognition"`
 	SpeakerThreshold   float64 `json:"speaker_threshold,omitempty"`
 }
 
 // TranscribeResult holds the structured response from a transcription.
 type TranscribeResult struct {
-	AudioID    string               `json:"audio_id"`
-	Segments   []transcript.Segment `json:"segments"`
-	Speakers   map[string]string    `json:"speakers"`
-	Embeddings map[string][]float64 `json:"embeddings"`
+	AudioID  string               `json:"audio_id"`
+	Segments []transcript.Segment `json:"segments"`
+	Speakers map[string]string    `json:"speakers"`
 }
 
 // SSEEvent represents a parsed server-sent event.
@@ -81,10 +86,9 @@ type SSEEvent struct {
 	Detail   *string             `json:"detail,omitempty"`
 	Progress *SSEProgress        `json:"progress,omitempty"`
 	// Result fields (embedded when type == "result")
-	AudioID    string               `json:"audio_id,omitempty"`
-	Segments   []transcript.Segment `json:"segments,omitempty"`
-	Speakers   map[string]string    `json:"speakers,omitempty"`
-	Embeddings map[string][]float64 `json:"embeddings,omitempty"`
+	AudioID  string               `json:"audio_id,omitempty"`
+	Segments []transcript.Segment `json:"segments,omitempty"`
+	Speakers map[string]string    `json:"speakers,omitempty"`
 	// Error fields
 	Message string `json:"message,omitempty"`
 }
@@ -94,10 +98,9 @@ type SSEEvent struct {
 // field added to the wire and forgotten here goes missing without a sound.
 func (e SSEEvent) Result() *TranscribeResult {
 	return &TranscribeResult{
-		AudioID:    e.AudioID,
-		Segments:   e.Segments,
-		Speakers:   e.Speakers,
-		Embeddings: e.Embeddings,
+		AudioID:  e.AudioID,
+		Segments: e.Segments,
+		Speakers: e.Speakers,
 	}
 }
 
@@ -205,8 +208,10 @@ func (c *HTTPClient) TranscribeStream(ctx context.Context, audioData []byte, opt
 			return
 		}
 		req.Header.Set("Content-Type", writer.FormDataContentType())
-		req.Header.Set("Modal-Key", c.TokenID)
-		req.Header.Set("Modal-Secret", c.TokenSecret)
+		if err := c.authorize(ctx, req); err != nil {
+			errCh <- err
+			return
+		}
 		req.ContentLength = bodySize
 
 		resp, err := c.HTTP.Do(req)
@@ -226,7 +231,8 @@ func (c *HTTPClient) TranscribeStream(ctx context.Context, audioData []byte, opt
 		defer resp.Body.Close()
 
 		if resp.StatusCode == http.StatusUnauthorized {
-			errCh <- fmt.Errorf("authentication failed (401). Check Modal credentials")
+			body, _ := io.ReadAll(resp.Body)
+			errCh <- fmt.Errorf("the service refused the sign-in: %s", detailOf(body))
 			return
 		}
 		if resp.StatusCode != http.StatusOK {
@@ -277,8 +283,30 @@ func (c *HTTPClient) TranscribeStream(ctx context.Context, audioData []byte, opt
 	return events, errCh
 }
 
+// detailOf pulls the explanation out of the service's error body.
+func detailOf(body []byte) string {
+	var payload struct {
+		Detail string `json:"detail"`
+	}
+	if json.Unmarshal(body, &payload) == nil && payload.Detail != "" {
+		return payload.Detail
+	}
+	text := strings.TrimSpace(string(body))
+	if len(text) > 200 {
+		text = text[:200] + "..."
+	}
+	if text == "" {
+		return "no explanation given"
+	}
+	return text
+}
+
 // classifyServerError turns raw HTTP error responses into actionable messages.
 func classifyServerError(status int, body []byte) error {
+	if status == http.StatusUnauthorized || status == http.StatusForbidden {
+		return fmt.Errorf("the service refused the sign-in: %s", detailOf(body))
+	}
+
 	bodyStr := strings.ToLower(string(body))
 
 	// Detect CUDA/GPU out-of-memory errors

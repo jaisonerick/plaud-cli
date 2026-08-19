@@ -21,6 +21,7 @@ class TranscribeOptions:
 
     language: str = ""
     context_doc: str = ""
+    recording_id: str = ""
     diarize: bool = False
     speaker_recognition: bool = False
     speaker_threshold: float = 0.35
@@ -55,7 +56,10 @@ class TranscriptionPipeline:
 
         All options come from `opts` — no shared mutable state.
         """
-        audio_id = str(uuid.uuid4())
+        # Keyed by the recording it came from, so a caller can name a speaker
+        # later knowing only what it already knows. A minted id would have to
+        # be written down somewhere, and the only somewhere is a caller's disk.
+        audio_id = opts.recording_id or str(uuid.uuid4())
 
         # 1. Declare pipeline stages
         stages = []
@@ -224,15 +228,14 @@ class TranscriptionPipeline:
                 segments = polished
                 yield _update("polish", "done", detail=f"{total_chunks} chunks")
 
-        # Final result. The embeddings travel with the transcript so a speaker
-        # can be named later from the saved file alone, with nothing on this
-        # side to look up and no audio to send again.
+        # No embedding leaves this service. They are voices of people who never
+        # agreed to be on anybody's laptop, and the store is shared, so every
+        # caller would end up holding everyone else's.
         yield {
             "type": "result",
             "audio_id": audio_id,
             "segments": segments,
             "speakers": speaker_map,
-            "embeddings": speaker_embeddings or {},
         }
 
     def transcribe(self, audio_data: bytes, opts: TranscribeOptions) -> dict:

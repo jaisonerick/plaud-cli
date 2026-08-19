@@ -14,6 +14,7 @@ image = (
         "torchaudio>=2.1",
         "litellm",
         "fastapi[standard]",
+        "google-auth",
     )
     .add_local_python_source("modal_whisper")
     .add_local_dir("modal_whisper/prompts", remote_path="/prompts")
@@ -47,6 +48,7 @@ async def open_speaker_store():
     secrets=[
         modal.Secret.from_name("huggingface-secret"),
         modal.Secret.from_name("openrouter-secret"),
+        modal.Secret.from_name("google-oauth"),
     ],
     volumes={"/cache": model_cache, "/speakers": speaker_volume},
     timeout=600,
@@ -80,16 +82,58 @@ class WhisperTranscriber:
             api_key=os.environ["OPENROUTER_API_KEY"],
         )
 
-    @modal.asgi_app(label="modal-whisper", requires_proxy_auth=True)
+    @modal.asgi_app(label="modal-whisper")
     def web(self):
-        from fastapi import FastAPI, File, Form, HTTPException, UploadFile
+        from fastapi import (
+            APIRouter,
+            Depends,
+            FastAPI,
+            File,
+            Form,
+            Header,
+            HTTPException,
+            UploadFile,
+        )
         from fastapi.responses import JSONResponse, StreamingResponse
 
+        from modal_whisper.auth import (
+            ALLOWED_DOMAINS,
+            Identity,
+            Unauthorized,
+            identify,
+        )
         from modal_whisper.builder import TranscribeOptions, TranscriptionPipeline
 
         web_app = FastAPI()
 
-        @web_app.post("/transcribe")
+        async def caller(authorization: str | None = Header(default=None)) -> Identity:
+            try:
+                return identify(authorization)
+            except Unauthorized as err:
+                raise HTTPException(status_code=401, detail=str(err)) from err
+
+        @web_app.get("/auth/config")
+        async def auth_config():
+            """The sign-in details, which a caller needs before it has a token.
+
+            Deliberately the one route outside the guest list. It carries the
+            OAuth client of an installed application, which Google does not
+            treat as a secret, and nothing about who may use this service.
+            """
+            return {
+                "client_id": os.environ["GOOGLE_CLIENT_ID"],
+                "client_secret": os.environ["GOOGLE_CLIENT_SECRET"],
+                "auth_uri": "https://accounts.google.com/o/oauth2/v2/auth",
+                "token_uri": "https://oauth2.googleapis.com/token",
+                "scopes": ["openid", "email", "profile"],
+                "domains": list(ALLOWED_DOMAINS),
+            }
+
+        # Everything else hangs off this router, so a route added later cannot
+        # forget to ask who is calling.
+        api = APIRouter(dependencies=[Depends(caller)])
+
+        @api.post("/transcribe")
         async def transcribe(
             audio: UploadFile = File(...),
             options: str = Form("{}"),
@@ -101,6 +145,7 @@ class WhisperTranscriber:
             opts = TranscribeOptions(
                 language=opts_json.get("language", ""),
                 context_doc=opts_json.get("context_doc", ""),
+                recording_id=opts_json.get("recording_id", ""),
                 diarize=opts_json.get("diarize", True),
                 speaker_recognition=opts_json.get("speaker_recognition", False),
                 speaker_threshold=opts_json.get("speaker_threshold", 0.35),
@@ -132,7 +177,7 @@ class WhisperTranscriber:
                 await model_cache.commit.aio()
                 return JSONResponse(result)
 
-        @web_app.put("/speakers/{audio_id}/{speaker_id}")
+        @api.put("/speakers/{audio_id}/{speaker_id}")
         async def set_speaker_name(
             audio_id: str, speaker_id: str, name: str = Form(...)
         ):
@@ -155,14 +200,14 @@ class WhisperTranscriber:
                 "speaker_id": speaker_id,
             }
 
-        @web_app.get("/speakers")
+        @api.get("/speakers")
         async def list_known_speakers():
             store = await open_speaker_store()
             counts = store.get_known_speaker_counts()
             store.close()
             return [{"name": name, "samples": n} for name, n in counts]
 
-        @web_app.post("/speakers")
+        @api.post("/speakers")
         async def add_known_speaker(name: str = Form(...), embedding: str = Form(...)):
             """Register a voice from an embedding the caller already holds.
 
@@ -183,7 +228,7 @@ class WhisperTranscriber:
             await speaker_volume.commit.aio()
             return {"name": name, "samples": samples}
 
-        @web_app.patch("/speakers")
+        @api.patch("/speakers")
         async def rename_known_speaker(old: str = Form(...), new: str = Form(...)):
             """Move every sample of one spelling onto another.
 
@@ -200,7 +245,7 @@ class WhisperTranscriber:
 
         # Spelled as a POST because the platform in front of this app answers a
         # DELETE with 405 before it ever arrives, however the route is declared.
-        @web_app.post("/speakers/forget")
+        @api.post("/speakers/forget")
         async def forget_known_speaker(name: str = Form(...)):
             """Drop a voice, for when a wrong one was learned.
 
@@ -215,7 +260,7 @@ class WhisperTranscriber:
             await speaker_volume.commit.aio()
             return {"name": name, "dropped": dropped}
 
-        @web_app.post("/speakers/enroll")
+        @api.post("/speakers/enroll")
         async def enroll_speakers(
             audio: UploadFile = File(...), speakers: str = Form(...)
         ):
@@ -245,6 +290,7 @@ class WhisperTranscriber:
             await speaker_volume.commit.aio()
             return {"enrolled": enrolled, "skipped": skipped}
 
+        web_app.include_router(api)
         return web_app
 
 

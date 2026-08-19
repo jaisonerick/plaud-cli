@@ -7,7 +7,6 @@ import (
 	"strings"
 
 	"github.com/jaisonerick/plaud-cli/internal/speaker"
-	"github.com/jaisonerick/plaud-cli/internal/transcript"
 	"github.com/spf13/cobra"
 )
 
@@ -17,24 +16,23 @@ var speakerCmd = &cobra.Command{
 }
 
 var speakerNameCmd = &cobra.Command{
-	Use:   "name <transcript> <speaker-label> <name>",
-	Short: "Name a speaker from a saved transcript",
-	Long: `Give a name to one of the speakers in a transcript this CLI produced.
+	Use:   "name <recording-id> <speaker-label> <full-name>",
+	Short: "Name a speaker in a recording that was transcribed",
+	Long: `Give a name to one of the voices the transcription separated.
 
-The voice is read from the speaker file saved beside the transcript, so this
-works on anything already on disk — no audio is uploaded and the recording
-need not still be known to the server. From then on, that voice is recognised
-in new transcriptions.
+The voices themselves stay on the service, which knows them by the recording
+they came from — the same id 'plaud list' shows. Nothing about them is kept on
+this machine. From then on, that voice is recognised in new transcriptions.
 
-If the name resembles one already known, you are asked before a second spelling
-of the same person is created.
+The full name is required, and one that resembles a name already known is
+queried before a second spelling of the same person is created.
 
 Example:
-  plaud speaker name ./transcript.md SPEAKER_01 "Jaison Erick"`,
+  plaud speaker name e348561a6b26d65c939add422cf48341 SPEAKER_01 "Jaison Erick"`,
 	Args: cobra.ExactArgs(3),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		ctx := cmd.Context()
-		path, label, name := args[0], args[1], strings.TrimSpace(args[2])
+		recordingID, label, name := args[0], args[1], strings.TrimSpace(args[2])
 
 		if err := requireFullName(name); err != nil {
 			return err
@@ -43,23 +41,6 @@ Example:
 		whisper, err := whisperClient()
 		if err != nil {
 			return err
-		}
-
-		sidecar := transcript.SpeakerSidecarPath(path)
-		file, err := transcript.ReadSpeakerFile(sidecar)
-		if err != nil {
-			if os.IsNotExist(err) {
-				return fmt.Errorf("no speaker file beside %s — expected %s, which transcriptions write from this version on", path, sidecar)
-			}
-			return err
-		}
-
-		entry, ok := file.Speakers[label]
-		if !ok {
-			return fmt.Errorf("%s holds no speaker %q (it has: %s)", sidecar, label, strings.Join(file.Labels(), ", "))
-		}
-		if len(entry.Embedding) == 0 {
-			return fmt.Errorf("%s has no voice recorded for %q, so there is nothing to recognise it by", sidecar, label)
 		}
 
 		known, err := whisper.ListKnownSpeakers(ctx)
@@ -76,18 +57,11 @@ Example:
 			return err
 		}
 
-		samples, err := whisper.AddKnownSpeaker(ctx, name, entry.Embedding)
-		if err != nil {
-			return fmt.Errorf("registering speaker: %w", err)
+		if err := whisper.SetSpeakerName(ctx, recordingID, label, name); err != nil {
+			return err
 		}
 
-		entry.Name = name
-		file.Speakers[label] = entry
-		if err := transcript.WriteSpeakerFile(sidecar, *file); err != nil {
-			fmt.Fprintf(os.Stderr, "Warning: could not update %s: %v\n", sidecar, err)
-		}
-
-		fmt.Printf("%s is now %q (%d voice sample(s) on file)\n", label, name, samples)
+		fmt.Printf("%s in %s is now %q\n", label, recordingID, name)
 		return nil
 	},
 }
@@ -140,31 +114,6 @@ func confirmName(name string, existing []string) (string, error) {
 		}
 		return matches[choice-1].Name, nil
 	}
-}
-
-var speakerSetCmd = &cobra.Command{
-	Use:   "set <audio-id> <speaker-id> <name>",
-	Short: "Name a speaker the server still remembers",
-	Long: `Name a speaker from a transcription the server has not yet forgotten.
-
-Prefer 'plaud speaker name', which reads the voice from the transcript on disk
-and therefore keeps working once the server has moved on.
-
-Example:
-  plaud speaker set abc-123-def SPEAKER_00 "Alice"`,
-	Args: cobra.ExactArgs(3),
-	RunE: func(cmd *cobra.Command, args []string) error {
-		whisper, err := whisperClient()
-		if err != nil {
-			return err
-		}
-		audioID, speakerID, name := args[0], args[1], args[2]
-		if err := whisper.SetSpeakerName(cmd.Context(), audioID, speakerID, name); err != nil {
-			return fmt.Errorf("setting speaker name: %w", err)
-		}
-		fmt.Printf("Speaker %q registered from audio %s/%s\n", name, audioID, speakerID)
-		return nil
-	},
 }
 
 var speakerListCmd = &cobra.Command{
@@ -264,7 +213,6 @@ func init() {
 	speakerCmd.AddCommand(speakerNameCmd)
 	speakerCmd.AddCommand(speakerForgetCmd)
 	speakerCmd.AddCommand(speakerRenameCmd)
-	speakerCmd.AddCommand(speakerSetCmd)
 	speakerCmd.AddCommand(speakerListCmd)
 	speakerCmd.AddCommand(speakerEnrollCmd)
 	rootCmd.AddCommand(speakerCmd)

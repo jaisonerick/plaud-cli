@@ -6,7 +6,9 @@ The container holds an A10G GPU and is scaled to zero between jobs, so it is bil
 
 ## What it exposes
 
-A FastAPI app behind Modal proxy auth. Callers send `Modal-Key` and `Modal-Secret` headers, which are workspace proxy tokens rather than the account tokens that deploy the app.
+A FastAPI app anyone can reach, guarded by a Google sign-in rather than by credentials from the cloud it runs on. Callers send `Authorization: Bearer <Google ID token>`; the app verifies the signature, the audience and the e-mail domain against the list in `modal_whisper/auth.py`.
+
+`GET /auth/config` is unauthenticated by necessity, since a caller needs it before it has a token. Everything else is mounted on a router carrying the check, so a route added later inherits it.
 
 | Route | Purpose |
 | --- | --- |
