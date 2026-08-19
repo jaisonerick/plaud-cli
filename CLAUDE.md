@@ -91,6 +91,7 @@ Every Whisper transcription writes a `.speakers.json` beside it, holding the emb
 - `speaker enroll` learns from the Plaud transcripts that already name their speakers, which is the one bulk source of labelled voice this account has. It reads every transcript, picks the recordings where each person speaks most, and sends only those stretches.
 - `speaker name <transcript> <label> <name>` names one voice from a saved transcript and its speaker file.
 - `speaker set` names one the server still holds an embedding for, and stops working once it no longer does.
+- `speaker rename` moves the samples of one spelling onto another; `speaker forget` drops a voice learned from the wrong person, which otherwise keeps claiming somebody else's in every transcription that follows.
 
 The store holds full names only. A lone first name identifies whichever Amanda the person typing it had in mind, and the store is shared with everyone using the service, so `speaker name` and `speaker rename` refuse anything shorter and `speaker list` marks the ones already stored that way.
 

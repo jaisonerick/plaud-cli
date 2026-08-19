@@ -186,6 +186,29 @@ func (c *HTTPClient) RenameKnownSpeaker(ctx context.Context, old, new string) (i
 	return result.Moved, nil
 }
 
+// ForgetKnownSpeaker drops every sample of a name.
+func (c *HTTPClient) ForgetKnownSpeaker(ctx context.Context, name string) (int, error) {
+	var buf bytes.Buffer
+	writer := multipart.NewWriter(&buf)
+	if err := writer.WriteField("name", name); err != nil {
+		return 0, fmt.Errorf("writing name field: %w", err)
+	}
+	writer.Close()
+
+	req, err := c.request(ctx, http.MethodPost, "/speakers/forget", writer.FormDataContentType(), &buf)
+	if err != nil {
+		return 0, err
+	}
+
+	var result struct {
+		Dropped int `json:"dropped"`
+	}
+	if err := c.do(req, &result); err != nil {
+		return 0, err
+	}
+	return result.Dropped, nil
+}
+
 // ListKnownSpeakers returns every voice the server recognises.
 func (c *HTTPClient) ListKnownSpeakers(ctx context.Context) ([]KnownSpeaker, error) {
 	req, err := c.request(ctx, http.MethodGet, "/speakers", "", nil)

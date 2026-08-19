@@ -234,8 +234,35 @@ Example:
 	},
 }
 
+var speakerForgetCmd = &cobra.Command{
+	Use:   "forget <name>",
+	Short: "Drop a voice the recogniser learned wrongly",
+	Long: `Remove every voice sample stored under a name.
+
+A sample learned from the wrong person is not inert: it is compared against
+every transcription from then on, and will keep claiming somebody else's
+voice until it is dropped.
+
+Example:
+  plaud speaker forget "Amanda Destro"`,
+	Args: cobra.ExactArgs(1),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		whisper, err := whisperClient()
+		if err != nil {
+			return err
+		}
+		dropped, err := whisper.ForgetKnownSpeaker(cmd.Context(), args[0])
+		if err != nil {
+			return fmt.Errorf("forgetting speaker: %w", err)
+		}
+		fmt.Printf("Dropped %d voice sample(s) of %q\n", dropped, args[0])
+		return nil
+	},
+}
+
 func init() {
 	speakerCmd.AddCommand(speakerNameCmd)
+	speakerCmd.AddCommand(speakerForgetCmd)
 	speakerCmd.AddCommand(speakerRenameCmd)
 	speakerCmd.AddCommand(speakerSetCmd)
 	speakerCmd.AddCommand(speakerListCmd)

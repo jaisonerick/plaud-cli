@@ -76,6 +76,14 @@ class SpeakerStore:
         self._conn.commit()
         return cursor.rowcount
 
+    def forget_known_speaker(self, name: str) -> int:
+        """Drop every sample of a name. Returns how many were dropped."""
+        cursor = self._conn.execute(
+            "DELETE FROM known_speakers WHERE name = ?", (name,)
+        )
+        self._conn.commit()
+        return cursor.rowcount
+
     def get_known_speaker_counts(self) -> list[tuple[str, int]]:
         """Return each known speaker with how many samples back it, commonest first."""
         rows = self._conn.execute(

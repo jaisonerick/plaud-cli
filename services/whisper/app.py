@@ -198,6 +198,23 @@ class WhisperTranscriber:
             await speaker_volume.commit.aio()
             return {"old": old, "new": new, "moved": moved}
 
+        # Spelled as a POST because the platform in front of this app answers a
+        # DELETE with 405 before it ever arrives, however the route is declared.
+        @web_app.post("/speakers/forget")
+        async def forget_known_speaker(name: str = Form(...)):
+            """Drop a voice, for when a wrong one was learned.
+
+            A sample attributed to the wrong person does not sit there inertly:
+            it is matched against every transcription from then on.
+            """
+            store = await open_speaker_store()
+            dropped = store.forget_known_speaker(name)
+            store.close()
+            if dropped == 0:
+                raise HTTPException(status_code=404, detail=f"no speaker named {name!r}")
+            await speaker_volume.commit.aio()
+            return {"name": name, "dropped": dropped}
+
         @web_app.post("/speakers/enroll")
         async def enroll_speakers(
             audio: UploadFile = File(...), speakers: str = Form(...)
