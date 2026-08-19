@@ -23,6 +23,7 @@ var (
 	enrollDryRun        bool
 	enrollYes           bool
 	enrollWorkers       int
+	enrollLimit         int
 )
 
 // genericLabel matches the placeholder Plaud uses for a voice nobody named.
@@ -79,6 +80,7 @@ Examples:
 
 		byRecording, chosen := selectSamples(samples)
 		reportPlan(samples, chosen)
+		byRecording = applyLimit(byRecording)
 
 		if enrollDryRun {
 			fmt.Printf("\nDry run: nothing was downloaded or enrolled.\n")
@@ -287,6 +289,32 @@ func selectSamples(samples map[string][]voiceSample) (map[string][]voiceSample, 
 	return byRecording, chosen
 }
 
+// applyLimit keeps the recordings that teach the most voices at once, and says
+// what it dropped: a cap nobody is told about reads as full coverage.
+func applyLimit(byRecording map[string][]voiceSample) map[string][]voiceSample {
+	if enrollLimit <= 0 || len(byRecording) <= enrollLimit {
+		return byRecording
+	}
+
+	ids := make([]string, 0, len(byRecording))
+	for id := range byRecording {
+		ids = append(ids, id)
+	}
+	sort.Slice(ids, func(i, j int) bool {
+		if len(byRecording[ids[i]]) != len(byRecording[ids[j]]) {
+			return len(byRecording[ids[i]]) > len(byRecording[ids[j]])
+		}
+		return ids[i] < ids[j]
+	})
+
+	kept := map[string][]voiceSample{}
+	for _, id := range ids[:enrollLimit] {
+		kept[id] = byRecording[id]
+	}
+	fmt.Printf("Limited to %d of %d recording(s); run again to continue.\n", enrollLimit, len(byRecording))
+	return kept
+}
+
 func reportPlan(samples map[string][]voiceSample, chosen map[string]int) {
 	names := make([]string, 0, len(samples))
 	for name := range samples {
@@ -397,4 +425,5 @@ func init() {
 	speakerEnrollCmd.Flags().BoolVar(&enrollDryRun, "dry-run", false, "show what would be learned without downloading audio")
 	speakerEnrollCmd.Flags().BoolVar(&enrollYes, "yes", false, "merge every name that resembles a known one, without asking")
 	speakerEnrollCmd.Flags().IntVar(&enrollWorkers, "workers", 6, "how many transcripts to read at once")
+	speakerEnrollCmd.Flags().IntVar(&enrollLimit, "limit", 0, "process at most this many recordings, richest first (0 for all)")
 }
