@@ -110,6 +110,11 @@ func whisperTranscribe(ctx context.Context, w io.Writer, whisper *modal.HTTPClie
 		return fail(fmt.Errorf("no result received — the server stream ended prematurely (the container may have crashed)"))
 	}
 
+	// The server declares its stages up front but drops some of them when
+	// diarization fails, taking compaction and speaker recognition with it.
+	// Wait blocks until every bar finishes, so retire the ones that never
+	// reported rather than hang a sync that nobody is watching.
+	tracker.Abort()
 	tracker.Wait()
 	return result, audioData, nil
 }
