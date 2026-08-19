@@ -70,13 +70,13 @@ type RecordingListResponse struct {
 type RecordingSimple struct {
 	ID            string   `json:"id"`
 	Name          string   `json:"filename"`
-	Duration      int64    `json:"duration"`      // milliseconds
-	StartTime     int64    `json:"start_time"`     // epoch ms
-	EditTime      int64    `json:"edit_time"`      // epoch seconds
+	Duration      int64    `json:"duration"`   // milliseconds
+	StartTime     int64    `json:"start_time"` // epoch ms
+	EditTime      int64    `json:"edit_time"`  // epoch seconds
 	Tags          []string `json:"filetag_id_list"`
 	HasSummary    bool     `json:"is_summary"`
 	HasTranscript bool     `json:"is_trans"`
-	FileType      string   `json:"filetype"`       // MIME type, e.g. "audio/mp3"
+	FileType      string   `json:"filetype"` // MIME type, e.g. "audio/mp3"
 	Scene         int      `json:"scene"`
 }
 
@@ -107,8 +107,8 @@ type RecordingDetailResponse struct {
 type RecordingDetail struct {
 	ID          string        `json:"file_id"`
 	Name        string        `json:"file_name"`
-	Duration    int64         `json:"duration"`    // milliseconds
-	StartTime   int64         `json:"start_time"`  // epoch ms
+	Duration    int64         `json:"duration"`   // milliseconds
+	StartTime   int64         `json:"start_time"` // epoch ms
 	Scene       int           `json:"scene"`
 	Tags        []string      `json:"filetag_id_list"`
 	ContentList []ContentItem `json:"content_list"`
@@ -120,7 +120,7 @@ type ContentItem struct {
 	DataType   string `json:"data_type"`   // "transaction" (transcript), "auto_sum_note" (summary), "consumer_note"
 	TaskStatus int    `json:"task_status"` // 1 = ready
 	DataTitle  string `json:"data_title"`
-	DataLink   string `json:"data_link"`   // presigned S3 URL
+	DataLink   string `json:"data_link"` // presigned S3 URL
 }
 
 // HasTranscript returns true if a transcript is available.
@@ -182,4 +182,3 @@ type TempURLResponse struct {
 	Envelope
 	URL string `json:"temp_url"`
 }
-

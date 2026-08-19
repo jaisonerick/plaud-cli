@@ -124,11 +124,21 @@ func (c *Client) PostForm(ctx context.Context, path string, values url.Values, r
 // If onProgress is non-nil, it is called with (bytesReceived, totalBytes)
 // as data arrives. totalBytes is -1 if Content-Length is unknown.
 func (c *Client) FetchFile(ctx context.Context, fileURL string, onProgress func(received, total int64)) ([]byte, error) {
+	return withRetries(ctx, func() ([]byte, error) {
+		return c.fetchOnce(ctx, fileURL, onProgress)
+	})
+}
+
+// withRetries repeats fn while the failure still looks like the network rather
+// than an answer.
+func withRetries[T any](ctx context.Context, fn func() (T, error)) (T, error) {
+	var zero T
 	var lastErr error
+
 	for attempt := 1; attempt <= fetchAttempts; attempt++ {
-		data, err := c.fetchOnce(ctx, fileURL, onProgress)
+		value, err := fn()
 		if err == nil {
-			return data, nil
+			return value, nil
 		}
 		lastErr = err
 
@@ -138,11 +148,11 @@ func (c *Client) FetchFile(ctx context.Context, fileURL string, onProgress func(
 		}
 		select {
 		case <-ctx.Done():
-			return nil, ctx.Err()
+			return zero, ctx.Err()
 		case <-time.After(time.Duration(attempt) * time.Second):
 		}
 	}
-	return nil, lastErr
+	return zero, lastErr
 }
 
 // fetchAttempts is how often a download is tried before giving up. The signed

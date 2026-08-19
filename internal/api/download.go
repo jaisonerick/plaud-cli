@@ -67,6 +67,12 @@ func (c *Client) DownloadGzipped(ctx context.Context, fileURL, destPath string) 
 
 // FetchGzipped fetches a gzipped presigned URL and returns the decompressed content.
 func (c *Client) FetchGzipped(ctx context.Context, fileURL string) ([]byte, error) {
+	return withRetries(ctx, func() ([]byte, error) {
+		return c.fetchGzippedOnce(ctx, fileURL)
+	})
+}
+
+func (c *Client) fetchGzippedOnce(ctx context.Context, fileURL string) ([]byte, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, fileURL, nil)
 	if err != nil {
 		return nil, fmt.Errorf("creating download request: %w", err)
@@ -81,7 +87,7 @@ func (c *Client) FetchGzipped(ctx context.Context, fileURL string) ([]byte, erro
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("download returned status %d", resp.StatusCode)
+		return nil, &statusError{code: resp.StatusCode}
 	}
 
 	body, err := io.ReadAll(resp.Body)
