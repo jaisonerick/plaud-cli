@@ -10,3 +10,8 @@ plaud-cli
 .vscode/
 *.swp
 *.swo
+
+# Python (services/whisper)
+__pycache__/
+*.py[cod]
+.venv/

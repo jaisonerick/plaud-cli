@@ -1,8 +1,23 @@
-name: Deploy to Modal
+name: Deploy Whisper
 
 on:
   push:
     branches: [main]
+    paths:
+      - services/whisper/**
+      - .github/workflows/deploy-whisper.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: deploy-whisper
+  cancel-in-progress: false
+
+defaults:
+  run:
+    working-directory: services/whisper
 
 jobs:
   deploy:
