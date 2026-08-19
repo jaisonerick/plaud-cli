@@ -22,6 +22,20 @@ image = (
 model_cache = modal.Volume.from_name("whisper-model-cache", create_if_missing=True)
 
 
+def open_speaker_store():
+    """Open the speaker database on the newest state of the volume.
+
+    Each container keeps its own view of a volume, so a write from another one
+    stays invisible until reloaded — and committing on top of a view that never
+    saw it publishes the file without it, silently undoing the write. Enrolling
+    a library hits this on every recording after the first.
+    """
+    from modal_whisper.speaker_store import SpeakerStore
+
+    model_cache.reload()
+    return SpeakerStore()
+
+
 @app.cls(
     gpu="A10G",
     image=image,
@@ -90,6 +104,7 @@ class WhisperTranscriber:
                 compact_gap=opts_json.get("compact_gap", 2000),
             )
 
+            model_cache.reload()
             pipeline = TranscriptionPipeline(self.whisper_model, self.llm)
 
             if stream:
@@ -116,9 +131,7 @@ class WhisperTranscriber:
         async def set_speaker_name(
             audio_id: str, speaker_id: str, name: str = Form(...)
         ):
-            from modal_whisper.speaker_store import SpeakerStore
-
-            store = SpeakerStore()
+            store = open_speaker_store()
             embedding = store.get_audio_speaker_info(audio_id, speaker_id)
             if embedding is None:
                 store.close()
@@ -139,9 +152,7 @@ class WhisperTranscriber:
 
         @web_app.get("/speakers")
         async def list_known_speakers():
-            from modal_whisper.speaker_store import SpeakerStore
-
-            store = SpeakerStore()
+            store = open_speaker_store()
             counts = store.get_known_speaker_counts()
             store.close()
             return [{"name": name, "samples": n} for name, n in counts]
@@ -154,15 +165,13 @@ class WhisperTranscriber:
             embedding rode along in the file, so there is nothing here to look
             up and no audio to upload again.
             """
-            from modal_whisper.speaker_store import SpeakerStore
-
             vector = json.loads(embedding)
             if not isinstance(vector, list) or not vector:
                 raise HTTPException(
                     status_code=400, detail="embedding must be a non-empty array"
                 )
 
-            store = SpeakerStore()
+            store = open_speaker_store()
             store.set_known_speaker(name, vector)
             samples = dict(store.get_known_speaker_counts()).get(name, 1)
             store.close()
@@ -177,13 +186,12 @@ class WhisperTranscriber:
 
             `speakers` is [{"name": str, "ranges": [[start_ms, end_ms], ...]}].
             """
-            from modal_whisper.speaker_store import SpeakerStore
             from modal_whisper.transcribe import load_audio
 
             spec = json.loads(speakers)
             audio_array = load_audio(await audio.read())
 
-            store = SpeakerStore()
+            store = open_speaker_store()
             enrolled, skipped = {}, {}
             try:
                 for entry in spec:
