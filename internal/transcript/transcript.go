@@ -97,14 +97,26 @@ func Search(segments []Segment, query string) []Match {
 // Returns the file extension and formatted content.
 func Format(segments []Segment, format string) (string, string) {
 	switch format {
-	case "txt":
-		return ".txt", ToText(segments)
 	case "srt":
-		return ".srt", ToSRT(segments)
+		return Ext(format), ToSRT(segments)
 	case "md":
-		return ".md", ToMarkdown(segments)
+		return Ext(format), ToMarkdown(segments)
 	default:
-		return ".txt", ToText(segments)
+		return Ext(format), ToText(segments)
+	}
+}
+
+// Ext is the file extension a formatted transcript is written under.
+func Ext(format string) string {
+	switch format {
+	case "json":
+		return ".json"
+	case "srt":
+		return ".srt"
+	case "md":
+		return ".md"
+	default:
+		return ".txt"
 	}
 }
 

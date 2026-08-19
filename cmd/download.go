@@ -18,6 +18,8 @@ var (
 	dlAll        bool
 	dlOutputDir  string
 	dlFormat     string
+	dlWhisper    bool
+	dlLanguage   string
 )
 
 var downloadCmd = &cobra.Command{
@@ -49,12 +51,8 @@ Examples:
 			dlAudio = true
 		}
 
-		// Validate format
-		switch dlFormat {
-		case "json", "txt", "srt", "md":
-			// ok
-		default:
-			return fmt.Errorf("unsupported format %q (use json, txt, srt, or md)", dlFormat)
+		if err := validateFormat(dlFormat); err != nil {
+			return err
 		}
 
 		// Ensure output directory exists
@@ -85,36 +83,47 @@ Examples:
 		}
 
 		if dlTranscript {
-			url := detail.TranscriptURL()
-			if url == "" {
-				fmt.Println("No transcript available for this recording.")
-			} else if dlFormat == "json" {
-				// Original behavior: save raw JSON
+			dest := filepath.Join(dlOutputDir, baseName+"_transcript"+transcript.Ext(dlFormat))
+			switch url := detail.TranscriptURL(); {
+			case url != "" && dlFormat == "json":
 				fmt.Print("Downloading transcript... ")
-				dest := filepath.Join(dlOutputDir, baseName+"_transcript.json")
 				if err := client.DownloadGzipped(ctx, url, dest); err != nil {
 					return fmt.Errorf("downloading transcript: %w", err)
 				}
 				fmt.Printf("saved to %s\n", dest)
-			} else {
-				// Download, parse, convert
+
+			case url != "":
 				fmt.Printf("Downloading transcript (%s)... ", dlFormat)
 				data, err := client.FetchGzipped(ctx, url)
 				if err != nil {
 					return fmt.Errorf("downloading transcript: %w", err)
 				}
-
 				segments, err := transcript.Parse(data)
 				if err != nil {
 					return fmt.Errorf("parsing transcript: %w", err)
 				}
-
-				ext, content := transcript.Format(segments, dlFormat)
-				dest := filepath.Join(dlOutputDir, baseName+"_transcript"+ext)
-				if err := os.WriteFile(dest, []byte(content), 0644); err != nil {
-					return fmt.Errorf("writing transcript: %w", err)
+				if err := saveTranscript(segments, dlFormat, dest); err != nil {
+					return err
 				}
 				fmt.Printf("saved to %s\n", dest)
+
+			case !dlWhisper:
+				fmt.Println("No transcript available for this recording (drop --whisper=false to transcribe it).")
+
+			default:
+				whisper, err := whisperClient()
+				if err != nil {
+					return err
+				}
+				fmt.Fprintln(os.Stderr, "No transcript on Plaud — transcribing with Whisper.")
+				result, _, err := whisperTranscribe(ctx, os.Stderr, whisper, id, whisperDefaults(dlLanguage))
+				if err != nil {
+					return err
+				}
+				if err := saveTranscript(result.Segments, dlFormat, dest); err != nil {
+					return err
+				}
+				fmt.Printf("Transcript saved to %s\n", dest)
 			}
 		}
 
@@ -136,7 +145,6 @@ Examples:
 	},
 }
 
-
 func init() {
 	downloadCmd.Flags().BoolVar(&dlAudio, "audio", false, "download audio file")
 	downloadCmd.Flags().BoolVar(&dlTranscript, "transcript", false, "download transcript")
@@ -144,5 +152,7 @@ func init() {
 	downloadCmd.Flags().BoolVar(&dlAll, "all", false, "download audio, transcript, and summary")
 	downloadCmd.Flags().StringVar(&dlOutputDir, "output-dir", ".", "output directory")
 	downloadCmd.Flags().StringVar(&dlFormat, "format", "json", "transcript format: json, txt, srt, md")
+	downloadCmd.Flags().BoolVar(&dlWhisper, "whisper", true, "transcribe with Whisper on Modal when Plaud holds no transcript")
+	downloadCmd.Flags().StringVar(&dlLanguage, "language", "", "force language code for Whisper (e.g. pt, en), empty for auto-detect")
 	rootCmd.AddCommand(downloadCmd)
 }

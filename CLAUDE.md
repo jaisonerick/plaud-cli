@@ -26,18 +26,19 @@ git push --tags
 - `internal/transcript/` — Transcript parsing, formatting (txt/srt/md), search, and filename utilities
 - `internal/ai/` — Claude API integration for ask/summarize commands
 - `internal/modal/` — Modal client for Whisper transcription
+- `services/whisper/` — the Whisper service itself (Python), deployed to Modal
 
 ## External Services
 
 - **Plaud API** (`api.plaud.ai`) — Recording data, transcripts, summaries
-- **Modal** (`modal-whisper` app) — Whisper transcription with speaker diarization. Source: `~/code/jaisonerick/modal-whisper`. Diarization uses WhisperX's `DiarizationPipeline` (from `whisperx.diarize`), not raw pyannote.
+- **Modal** (`modal-whisper` app) — Whisper transcription with speaker diarization. Source: `services/whisper/`. Diarization uses WhisperX's `DiarizationPipeline` (from `whisperx.diarize`), not raw pyannote.
 - **Anthropic Claude** — AI summaries and Q&A (`ANTHROPIC_API_KEY`)
 
 ## Segment Contract
 
 Transcripts (from both Plaud API and Modal Whisper) use a shared segment format.
 
-- **Schema definition:** `modal-whisper/segment_schema.json` (JSON Schema)
+- **Schema definition:** `services/whisper/segment_schema.json` (JSON Schema)
 - **Go struct:** `internal/transcript/transcript.go` — `Segment` struct
 - Fields: `start_time` (ms), `end_time` (ms), `content` (string), `speaker` (string, empty if no diarization)
 
@@ -51,6 +52,7 @@ PLAUD_API_URL          Override API endpoint
 ANTHROPIC_API_KEY      Claude API key (ask/summarize commands)
 MODAL_TOKEN_ID         Modal auth (or use `plaud modal-auth`)
 MODAL_TOKEN_SECRET     Modal auth (or use `plaud modal-auth`)
+MODAL_ENDPOINT_URL     Web endpoint of the deployed Whisper service
 PLAUD_EMAIL            Non-interactive `login`: email to send the code to
 PLAUD_CODE             Non-interactive `login`: the emailed code
 PLAUD_OTP_TOKEN        Non-interactive `login`: the OTP token from the send step
@@ -69,6 +71,16 @@ Three ways in, in `cmd/login.go`:
 Accounts created through Google, Apple or Microsoft SSO have no password until one is set in the Plaud app, so the password flow does not apply to them.
 
 `/auth/access-token` also returns a `refresh_token` and expiry fields, which this client currently ignores. Access tokens last months and nothing here renews them.
+
+## Transcription
+
+Plaud issues no new transcripts for this account, so Whisper on Modal is the only thing here that turns audio into text. `transcribe` always goes to Whisper. `sync` and `download` prefer a transcript Plaud already holds and fall back to Whisper for the rest, which `--whisper=false` turns off.
+
+`generate` asks Plaud to transcribe and needs the credits the account no longer has.
+
+Speaker recognition stays off on the fallback path: naming a speaker needs a person at a browser, and `sync` runs over the whole library unattended. `transcribe --identify` is where names get attached.
+
+The GPU container is scaled to zero between jobs, so every run pays a cold start before its first stage reports, and `sync` says how many recordings it is about to send before the first one starts.
 
 ## Config Files
 

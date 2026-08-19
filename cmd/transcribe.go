@@ -12,7 +12,6 @@ import (
 	"github.com/jaisonerick/plaud-cli/internal/api"
 	"github.com/jaisonerick/plaud-cli/internal/identify"
 	"github.com/jaisonerick/plaud-cli/internal/modal"
-	"github.com/jaisonerick/plaud-cli/internal/progress"
 	"github.com/jaisonerick/plaud-cli/internal/transcript"
 	"github.com/spf13/cobra"
 )
@@ -50,26 +49,19 @@ Examples:
 		ctx := cmd.Context()
 		id := args[0]
 
-		// Check Modal configuration
-		httpClient := modal.LoadHTTPClient(cfg.ModalTokenID, cfg.ModalTokenSecret, cfg.ModalEndpointURL)
-		if httpClient == nil {
-			return fmt.Errorf("Modal not configured. Run 'plaud modal-auth' or set MODAL_TOKEN_ID, MODAL_TOKEN_SECRET, and MODAL_ENDPOINT_URL environment variables")
+		whisper, err := whisperClient()
+		if err != nil {
+			return err
 		}
 
-		// Validate format
-		switch trFormat {
-		case "json", "txt", "srt", "md":
-			// ok
-		default:
-			return fmt.Errorf("unsupported format %q (use json, txt, srt, or md)", trFormat)
+		if err := validateFormat(trFormat); err != nil {
+			return err
 		}
 
-		// Ensure output directory exists
 		if err := os.MkdirAll(trOutputDir, 0755); err != nil {
 			return fmt.Errorf("creating output directory: %w", err)
 		}
 
-		// Fetch recording details
 		detail, err := client.GetDetail(ctx, id)
 		if err != nil {
 			return fmt.Errorf("fetching recording details: %w", err)
@@ -77,237 +69,150 @@ Examples:
 
 		baseName := transcript.SanitizeFilename(detail.Name) + "_" + strings.ReplaceAll(api.FormatEpochMs(detail.StartTime), " ", "_")
 
-		// Parse options
-		diarize, polish, compact, speakerRecognition := true, true, true, true
-		if trOptions != "" {
-			for _, opt := range strings.Split(trOptions, ",") {
-				switch strings.TrimSpace(opt) {
-				case "no-diarize":
-					diarize = false
-				case "no-polish":
-					polish = false
-				case "no-compact":
-					compact = false
-				case "no-speaker-recognition":
-					speakerRecognition = false
-				default:
-					return fmt.Errorf("unknown option %q (valid: no-diarize, no-polish, no-compact, no-speaker-recognition)", opt)
-				}
-			}
+		opts, err := parseTranscribeOptions(trOptions)
+		if err != nil {
+			return err
 		}
-		if !diarize {
-			compact = false
-		}
+		opts.CompactGap = trCompactGap
+		opts.Language = trLanguage
 
-		// Read context file if provided
-		var contextDoc string
 		if trContext != "" {
 			data, err := os.ReadFile(trContext)
 			if err != nil {
 				return fmt.Errorf("reading context file: %w", err)
 			}
-			contextDoc = string(data)
+			opts.ContextDoc = string(data)
 		}
 
-		// Set up progress tracker with client-side stages
-		tracker := progress.NewTracker(os.Stderr, []progress.StageDef{
-			{ID: "download", Label: "Downloading audio"},
-			{ID: "upload", Label: "Waiting for server"},
-		})
-
-		// Phase 1: Download audio
-		tracker.Update(progress.Event{Stage: "download", Status: "started"})
-		tempURL, err := client.GetTempURL(ctx, id)
+		result, audioData, err := whisperTranscribe(ctx, os.Stderr, whisper, id, opts)
 		if err != nil {
-			return fmt.Errorf("getting download URL: %w", err)
-		}
-
-		audioData, err := client.FetchFile(ctx, tempURL, func(received, total int64) {
-			if total > 0 {
-				pct := received * 100 / total
-				tracker.Update(progress.Event{
-					Stage:  "download",
-					Status: "progress",
-					Detail: fmt.Sprintf("%d%%  %.1f MB", pct, float64(received)/1e6),
-				})
-			}
-		})
-		if err != nil {
-			return fmt.Errorf("downloading audio: %w", err)
-		}
-		tracker.Update(progress.Event{Stage: "download", Status: "done", Detail: fmt.Sprintf("%.1f MB", float64(len(audioData))/1e6)})
-
-		// Phase 2: Wait for server
-		// Covers upload, cold start, and initial server handshake.
-		// Ends when the first SSE event (init) arrives.
-		tracker.Update(progress.Event{Stage: "upload", Status: "started"})
-
-		events, errCh := httpClient.TranscribeStream(ctx, audioData, modal.TranscribeOpts{
-			Diarize:            diarize,
-			Polish:             polish,
-			Compact:            compact,
-			CompactGap:         trCompactGap,
-			Language:           trLanguage,
-			ContextDoc:         contextDoc,
-			SpeakerRecognition: speakerRecognition,
-		}, modal.StreamCallbacks{})
-
-		var result *modal.TranscribeResult
-		for evt := range events {
-			switch evt.Type {
-			case "init":
-				// First server event — server is ready
-				tracker.Update(progress.Event{Stage: "upload", Status: "done"})
-				// Insert server stages, then save
-				tracker.AddStages(evt.Stages)
-				tracker.AddStages([]progress.StageDef{{ID: "save", Label: "Saving transcript"}})
-
-			case "update":
-				e := progress.Event{
-					Stage:  evt.Stage,
-					Status: evt.Status,
-				}
-				if evt.Detail != nil {
-					e.Detail = *evt.Detail
-				}
-				if evt.Progress != nil {
-					e.Current = evt.Progress.Current
-					e.Total = evt.Progress.Total
-				}
-				tracker.Update(e)
-
-			case "result":
-				result = &modal.TranscribeResult{
-					AudioID:  evt.AudioID,
-					Segments: evt.Segments,
-					Speakers: evt.Speakers,
-				}
-
-			case "error":
-				tracker.Abort()
-				tracker.Wait()
-				return fmt.Errorf("transcription failed at %s: %s", evt.Stage, evt.Message)
-			}
-		}
-		if err := <-errCh; err != nil {
-			tracker.Abort()
-			tracker.Wait()
 			return err
 		}
 
-		if result == nil {
-			tracker.Abort()
-			tracker.Wait()
-			return fmt.Errorf("no result received — the server stream ended prematurely (the container may have crashed)")
+		dest := filepath.Join(trOutputDir, baseName+"_whisper"+transcript.Ext(trFormat))
+		if err := saveTranscript(result.Segments, trFormat, dest); err != nil {
+			return err
 		}
-
-		// Phase 3: Save result
-		tracker.Update(progress.Event{Stage: "save", Status: "started"})
-
-		var dest string
-		if trFormat == "json" {
-			dest = filepath.Join(trOutputDir, baseName+"_whisper.json")
-			data, err := json.MarshalIndent(result.Segments, "", "  ")
-			if err != nil {
-				return fmt.Errorf("marshaling transcript: %w", err)
-			}
-			if err := os.WriteFile(dest, data, 0644); err != nil {
-				return fmt.Errorf("writing transcript: %w", err)
-			}
-		} else {
-			ext, content := transcript.Format(result.Segments, trFormat)
-			dest = filepath.Join(trOutputDir, baseName+"_whisper"+ext)
-			if err := os.WriteFile(dest, []byte(content), 0644); err != nil {
-				return fmt.Errorf("writing transcript: %w", err)
-			}
-		}
-
-		tracker.Update(progress.Event{Stage: "save", Status: "done"})
-		tracker.Wait()
-
-		// Summary
 		fmt.Fprintf(os.Stderr, "\nSaved to %s\n", dest)
 
-		// Speaker identification
-		if len(result.Speakers) > 0 && trIdentify {
-			unresolved := identify.UnresolvedSpeakers(result.Speakers)
+		if len(result.Speakers) == 0 {
+			return nil
+		}
 
-			// Show recognized speakers
-			var recognized []string
-			for k, v := range result.Speakers {
-				if k != v {
-					recognized = append(recognized, v)
-				}
+		var recognized []string
+		for id, name := range result.Speakers {
+			if id != name {
+				recognized = append(recognized, name)
 			}
-			if len(recognized) > 0 {
-				fmt.Fprintf(os.Stderr, "Recognized: %s\n", strings.Join(recognized, ", "))
-			}
+		}
 
-			if len(unresolved) > 0 {
-				fmt.Fprintf(os.Stderr, "Unidentified: %s\n", strings.Join(unresolved, ", "))
-				fmt.Fprintf(os.Stderr, "\nOpen browser to identify? [Y/n] ")
-
-				reader := bufio.NewReader(os.Stdin)
-				line, _ := reader.ReadString('\n')
-				line = strings.TrimSpace(strings.ToLower(line))
-
-				if line == "" || line == "y" || line == "yes" {
-					idResult, err := identify.RunServer(ctx, identify.Config{
-						AudioData: audioData,
-						AudioID:   result.AudioID,
-						Speakers:  result.Speakers,
-						Segments:  result.Segments,
-					})
-					if err != nil {
-						return fmt.Errorf("speaker identification: %w", err)
-					}
-
-					if len(idResult.Names) > 0 {
-						fmt.Fprintf(os.Stderr, "\n")
-						var wg sync.WaitGroup
-						for speakerID, name := range idResult.Names {
-							wg.Add(1)
-							go func(sid, n string) {
-								defer wg.Done()
-								if err := httpClient.SetSpeakerName(ctx, result.AudioID, sid, n); err != nil {
-									fmt.Fprintf(os.Stderr, "  Warning: failed to register %s: %v\n", sid, err)
-									return
-								}
-								fmt.Fprintf(os.Stderr, "  Registered %q (%s)\n", n, sid)
-							}(speakerID, name)
-						}
-						wg.Wait()
-
-						// Update speakers map and re-save transcript with real names
-						for sid, name := range idResult.Names {
-							result.Speakers[sid] = name
-						}
-						applySpeakerNames(result.Segments, result.Speakers)
-						if err := saveTranscript(result.Segments, trFormat, dest); err != nil {
-							fmt.Fprintf(os.Stderr, "  Warning: failed to update transcript: %v\n", err)
-						} else {
-							fmt.Fprintf(os.Stderr, "  Updated %s\n", dest)
-						}
-					}
-				}
-			} else {
-				fmt.Fprintf(os.Stderr, "All speakers identified: %s\n", strings.Join(recognized, ", "))
-			}
-		} else if len(result.Speakers) > 0 {
-			// Not using --identify, just list speakers
+		if !trIdentify {
 			var names []string
-			for k, v := range result.Speakers {
-				if k != v {
-					names = append(names, v)
+			for id, name := range result.Speakers {
+				if id == name {
+					names = append(names, id)
 				} else {
-					names = append(names, k)
+					names = append(names, name)
 				}
 			}
 			fmt.Fprintf(os.Stderr, "Speakers: %s\n", strings.Join(names, ", "))
+			return nil
+		}
+
+		if len(recognized) > 0 {
+			fmt.Fprintf(os.Stderr, "Recognized: %s\n", strings.Join(recognized, ", "))
+		}
+
+		unresolved := identify.UnresolvedSpeakers(result.Speakers)
+		if len(unresolved) == 0 {
+			fmt.Fprintf(os.Stderr, "All speakers identified: %s\n", strings.Join(recognized, ", "))
+			return nil
+		}
+
+		fmt.Fprintf(os.Stderr, "Unidentified: %s\n", strings.Join(unresolved, ", "))
+		fmt.Fprintf(os.Stderr, "\nOpen browser to identify? [Y/n] ")
+
+		line, _ := bufio.NewReader(os.Stdin).ReadString('\n')
+		switch strings.TrimSpace(strings.ToLower(line)) {
+		case "", "y", "yes":
+		default:
+			return nil
+		}
+
+		idResult, err := identify.RunServer(ctx, identify.Config{
+			AudioData: audioData,
+			AudioID:   result.AudioID,
+			Speakers:  result.Speakers,
+			Segments:  result.Segments,
+		})
+		if err != nil {
+			return fmt.Errorf("speaker identification: %w", err)
+		}
+		if len(idResult.Names) == 0 {
+			return nil
+		}
+
+		fmt.Fprintf(os.Stderr, "\n")
+		var wg sync.WaitGroup
+		for speakerID, name := range idResult.Names {
+			wg.Add(1)
+			go func(sid, n string) {
+				defer wg.Done()
+				if err := whisper.SetSpeakerName(ctx, result.AudioID, sid, n); err != nil {
+					fmt.Fprintf(os.Stderr, "  Warning: failed to register %s: %v\n", sid, err)
+					return
+				}
+				fmt.Fprintf(os.Stderr, "  Registered %q (%s)\n", n, sid)
+			}(speakerID, name)
+		}
+		wg.Wait()
+
+		for sid, name := range idResult.Names {
+			result.Speakers[sid] = name
+		}
+		applySpeakerNames(result.Segments, result.Speakers)
+		if err := saveTranscript(result.Segments, trFormat, dest); err != nil {
+			fmt.Fprintf(os.Stderr, "  Warning: failed to update transcript: %v\n", err)
+		} else {
+			fmt.Fprintf(os.Stderr, "  Updated %s\n", dest)
 		}
 
 		return nil
 	},
+}
+
+// parseTranscribeOptions reads the comma-separated disable flags of --options.
+func parseTranscribeOptions(s string) (modal.TranscribeOpts, error) {
+	opts := modal.TranscribeOpts{
+		Diarize:            true,
+		Polish:             true,
+		Compact:            true,
+		SpeakerRecognition: true,
+	}
+	if s == "" {
+		return opts, nil
+	}
+	for _, opt := range strings.Split(s, ",") {
+		switch strings.TrimSpace(opt) {
+		case "no-diarize":
+			opts.Diarize = false
+		case "no-polish":
+			opts.Polish = false
+		case "no-compact":
+			opts.Compact = false
+		case "no-speaker-recognition":
+			opts.SpeakerRecognition = false
+		default:
+			return opts, fmt.Errorf("unknown option %q (valid: no-diarize, no-polish, no-compact, no-speaker-recognition)", opt)
+		}
+	}
+	// Both compaction and speaker recognition read the speaker of a segment,
+	// which only diarization fills in.
+	if !opts.Diarize {
+		opts.Compact = false
+		opts.SpeakerRecognition = false
+	}
+	return opts, nil
 }
 
 // applySpeakerNames replaces SPEAKER_XX tags in segments with real names from the speakers map.
@@ -330,6 +235,16 @@ func saveTranscript(segments []transcript.Segment, format, dest string) error {
 	}
 	_, content := transcript.Format(segments, format)
 	return os.WriteFile(dest, []byte(content), 0644)
+}
+
+// validateFormat rejects an output format none of the writers can produce.
+func validateFormat(format string) error {
+	switch format {
+	case "json", "txt", "srt", "md":
+		return nil
+	default:
+		return fmt.Errorf("unsupported format %q (use json, txt, srt, or md)", format)
+	}
 }
 
 func init() {

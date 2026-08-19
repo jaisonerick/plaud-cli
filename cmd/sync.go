@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/jaisonerick/plaud-cli/internal/api"
+	"github.com/jaisonerick/plaud-cli/internal/modal"
 	"github.com/jaisonerick/plaud-cli/internal/transcript"
 	"github.com/spf13/cobra"
 )
@@ -20,6 +21,8 @@ var (
 	syncSummary    bool
 	syncFormat     string
 	syncForce      bool
+	syncWhisper    bool
+	syncLanguage   string
 )
 
 // syncState tracks which recordings have been synced.
@@ -53,12 +56,8 @@ Examples:
 			syncSummary = true
 		}
 
-		// Validate format
-		switch syncFormat {
-		case "json", "txt", "srt", "md":
-			// ok
-		default:
-			return fmt.Errorf("unsupported format %q (use json, txt, srt, or md)", syncFormat)
+		if err := validateFormat(syncFormat); err != nil {
+			return err
 		}
 
 		// Ensure output directory exists
@@ -76,6 +75,21 @@ Examples:
 		recordings, err := client.ListRecordings(ctx)
 		if err != nil {
 			return err
+		}
+
+		// Resolve Modal once: a missing credential should fail before the
+		// first download, not once per recording.
+		var whisperHTTP *modal.HTTPClient
+		if syncTranscript && syncWhisper {
+			whisperHTTP, err = whisperClient()
+			if err != nil {
+				return err
+			}
+			// Each of these wakes a GPU container and bills for it, so say how
+			// many are coming before the first one starts.
+			if pending := countPendingWhisper(recordings, state); pending > 0 {
+				fmt.Printf("%d recording(s) have no Plaud transcript and will be transcribed on Modal.\n", pending)
+			}
 		}
 
 		var synced, updated, upToDate, errors int
@@ -156,6 +170,19 @@ Examples:
 						}
 					}
 				}
+			} else if syncTranscript && syncWhisper {
+				fmt.Printf("  Transcribing with Whisper: %s\n", r.Name)
+				result, _, err := whisperTranscribe(ctx, os.Stderr, whisperHTTP, r.ID, whisperDefaults(syncLanguage))
+				if err != nil {
+					fmt.Fprintf(os.Stderr, "  Error transcribing %s: %v\n", r.Name, err)
+					hasError = true
+				} else {
+					dest := filepath.Join(recDir, "transcript"+transcript.Ext(syncFormat))
+					if err := saveTranscript(result.Segments, syncFormat, dest); err != nil {
+						fmt.Fprintf(os.Stderr, "  Error writing transcript for %s: %v\n", r.Name, err)
+						hasError = true
+					}
+				}
 			}
 
 			if syncSummary && r.HasSummary {
@@ -207,6 +234,21 @@ Examples:
 
 		return nil
 	},
+}
+
+// countPendingWhisper counts the recordings this run would send to Whisper.
+func countPendingWhisper(recordings []api.RecordingSimple, state *syncState) int {
+	n := 0
+	for _, r := range recordings {
+		entry, exists := state.Recordings[r.ID]
+		if exists && !syncForce && entry.EditTime >= r.EditTime {
+			continue
+		}
+		if !r.HasTranscript {
+			n++
+		}
+	}
+	return n
 }
 
 func syncStatePath() (string, error) {
@@ -266,5 +308,7 @@ func init() {
 	syncCmd.Flags().BoolVar(&syncSummary, "summary", false, "sync summaries")
 	syncCmd.Flags().StringVar(&syncFormat, "format", "md", "transcript format: json, txt, srt, md")
 	syncCmd.Flags().BoolVar(&syncForce, "force", false, "re-download everything")
+	syncCmd.Flags().BoolVar(&syncWhisper, "whisper", true, "transcribe with Whisper on Modal when Plaud holds no transcript")
+	syncCmd.Flags().StringVar(&syncLanguage, "language", "", "force language code for Whisper (e.g. pt, en), empty for auto-detect")
 	rootCmd.AddCommand(syncCmd)
 }
