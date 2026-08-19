@@ -6,6 +6,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -123,6 +124,38 @@ func (c *Client) PostForm(ctx context.Context, path string, values url.Values, r
 // If onProgress is non-nil, it is called with (bytesReceived, totalBytes)
 // as data arrives. totalBytes is -1 if Content-Length is unknown.
 func (c *Client) FetchFile(ctx context.Context, fileURL string, onProgress func(received, total int64)) ([]byte, error) {
+	var lastErr error
+	for attempt := 1; attempt <= fetchAttempts; attempt++ {
+		data, err := c.fetchOnce(ctx, fileURL, onProgress)
+		if err == nil {
+			return data, nil
+		}
+		lastErr = err
+
+		var status *statusError
+		if ctx.Err() != nil || errors.As(err, &status) {
+			break
+		}
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-time.After(time.Duration(attempt) * time.Second):
+		}
+	}
+	return nil, lastErr
+}
+
+// fetchAttempts is how often a download is tried before giving up. The signed
+// URLs these come from drop connections mid-transfer often enough that one EOF
+// should not cost a run that downloads dozens of files in a row.
+const fetchAttempts = 3
+
+// statusError is a refusal from the other end, which retrying only repeats.
+type statusError struct{ code int }
+
+func (e *statusError) Error() string { return fmt.Sprintf("download returned status %d", e.code) }
+
+func (c *Client) fetchOnce(ctx context.Context, fileURL string, onProgress func(received, total int64)) ([]byte, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, fileURL, nil)
 	if err != nil {
 		return nil, fmt.Errorf("creating download request: %w", err)
@@ -135,7 +168,7 @@ func (c *Client) FetchFile(ctx context.Context, fileURL string, onProgress func(
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("download returned status %d", resp.StatusCode)
+		return nil, &statusError{code: resp.StatusCode}
 	}
 
 	var reader io.Reader = resp.Body
