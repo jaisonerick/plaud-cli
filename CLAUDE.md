@@ -92,7 +92,9 @@ The GPU container is scaled to zero between jobs, so every run pays a cold start
 
 Diarization separates voices and calls them `SPEAKER_00`, `SPEAKER_01`. Recognition turns those into people, by comparing each voice against ones already learned.
 
-A person is a **first name, a last name and a company**, and is written everywhere as `First Last (Company)` — which is the form transcripts carry. Anything past the second word of a name is dropped: what used to arrive there was a company glued on, and it has a field of its own now. Every person also records **who added them**, the Google account that did it.
+A person is a **first name, a surname and a company**, and is written everywhere as `First Last (Company)` — which is the form transcripts carry. The surname is everything after the first name, kept whole: "da Silva" and "La O" are surnames, not leftovers to trim. Every person also records **who added them**, the Google account that did it.
+
+A surname may be genuinely unknown, which is not the same as one nobody bothered to type. Saying so takes `--surname-unknown`, so the default still catches the "Amanda" typed without thinking; the company then does the identifying, and a second person of that first name is refused until somebody looks a surname up.
 
 The store is shared by everyone signed in, which is why a lone first name is refused: "Amanda" names whichever Amanda the person typing had in mind. `people.folded` is UNIQUE, so a second spelling of one person cannot be created at all — every previous guard against that was a convention, and conventions are what split them.
 
