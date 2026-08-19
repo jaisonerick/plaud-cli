@@ -14,9 +14,9 @@ import (
 	"net/http"
 	"net/url"
 	"os"
-	"os/exec"
+
+	"github.com/jaisonerick/plaud-cli/internal/browser"
 	"path/filepath"
-	"runtime"
 	"strings"
 	"time"
 )
@@ -30,6 +30,16 @@ type Config struct {
 	TokenURI     string   `json:"token_uri"`
 	Scopes       []string `json:"scopes"`
 	Domains      []string `json:"domains"`
+}
+
+// DeviceCode is a pending sign-in: a short code for a person to type somewhere
+// else, and a handle for this machine to ask about it with.
+type DeviceCode struct {
+	DeviceCode      string `json:"device_code"`
+	UserCode        string `json:"user_code"`
+	VerificationURL string `json:"verification_url"`
+	ExpiresIn       int    `json:"expires_in"`
+	Interval        int    `json:"interval"`
 }
 
 // Session is what survives between runs: enough to ask Google for a fresh
@@ -62,6 +72,94 @@ func FetchConfig(ctx context.Context, serviceURL string) (*Config, error) {
 		return nil, fmt.Errorf("%s returned incomplete sign-in details", serviceURL)
 	}
 	return &cfg, nil
+}
+
+// DeviceEndpoint is where a sign-in with nowhere to redirect to begins.
+const DeviceEndpoint = "https://oauth2.googleapis.com/device/code"
+
+// StartDevice asks Google for a code the person can type on any device.
+// Nothing here needs a browser, a port, or a terminal anybody can see, which
+// is what lets the sign-in be conducted by whoever is running the commands.
+func StartDevice(ctx context.Context, cfg *Config) (*DeviceCode, error) {
+	form := url.Values{
+		"client_id": {cfg.ClientID},
+		"scope":     {strings.Join(scopesOf(cfg), " ")},
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, DeviceEndpoint, strings.NewReader(form.Encode()))
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("asking Google to start the sign-in: %w", err)
+	}
+	defer resp.Body.Close()
+
+	data, _ := io.ReadAll(resp.Body)
+	var pending DeviceCode
+	if err := json.Unmarshal(data, &pending); err != nil {
+		return nil, fmt.Errorf("parsing Google's answer: %w", err)
+	}
+	if pending.UserCode == "" {
+		var failure tokenResponse
+		_ = json.Unmarshal(data, &failure)
+		return nil, fmt.Errorf("Google refused to start the sign-in: %s",
+			strings.TrimSpace(failure.Error+" "+failure.Description))
+	}
+	if pending.Interval <= 0 {
+		pending.Interval = 5
+	}
+	return &pending, nil
+}
+
+// AwaitDevice waits for the person to finish, and returns the session.
+func AwaitDevice(ctx context.Context, cfg *Config, pending *DeviceCode) (*Session, error) {
+	deadline := time.Now().Add(time.Duration(pending.ExpiresIn) * time.Second)
+	wait := time.Duration(pending.Interval) * time.Second
+
+	for {
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-time.After(wait):
+		}
+		if time.Now().After(deadline) {
+			return nil, fmt.Errorf("the code expired before it was entered — start again")
+		}
+
+		body, err := exchange(ctx, cfg, url.Values{
+			"grant_type":  {"urn:ietf:params:oauth:grant-type:device_code"},
+			"device_code": {pending.DeviceCode},
+		})
+		if err == nil {
+			if body.RefreshToken == "" {
+				return nil, fmt.Errorf("Google returned no refresh token, so this would ask again every time")
+			}
+			return &Session{Email: emailIn(body.IDToken), RefreshToken: body.RefreshToken}, nil
+		}
+
+		switch {
+		case strings.Contains(err.Error(), "authorization_pending"):
+			// Nobody has typed the code yet, which is the normal state.
+		case strings.Contains(err.Error(), "slow_down"):
+			wait += 5 * time.Second
+		case strings.Contains(err.Error(), "access_denied"):
+			return nil, fmt.Errorf("the sign-in was refused on the other device")
+		case strings.Contains(err.Error(), "expired_token"):
+			return nil, fmt.Errorf("the code expired before it was entered — start again")
+		default:
+			return nil, err
+		}
+	}
+}
+
+func scopesOf(cfg *Config) []string {
+	if len(cfg.Scopes) > 0 {
+		return cfg.Scopes
+	}
+	return []string{"openid", "email", "profile"}
 }
 
 // SessionPath is where the sign-in is kept.
@@ -203,10 +301,7 @@ func SignIn(ctx context.Context, cfg *Config, w io.Writer) (*Session, error) {
 	defer listener.Close()
 	redirect := fmt.Sprintf("http://127.0.0.1:%d/", listener.Addr().(*net.TCPAddr).Port)
 
-	scopes := cfg.Scopes
-	if len(scopes) == 0 {
-		scopes = []string{"openid", "email", "profile"}
-	}
+	scopes := scopesOf(cfg)
 	query := url.Values{
 		"client_id":     {cfg.ClientID},
 		"redirect_uri":  {redirect},
@@ -278,7 +373,7 @@ func awaitRedirect(ctx context.Context, listener net.Listener, state, authURL st
 	defer server.Close()
 
 	fmt.Fprintf(w, "Opening your browser to sign in with Google.\nIf it does not open, visit:\n\n%s\n\n", authURL)
-	openBrowser(authURL)
+	browser.Open(authURL)
 
 	select {
 	case r := <-done:
@@ -288,20 +383,6 @@ func awaitRedirect(ctx context.Context, listener net.Listener, state, authURL st
 	case <-time.After(5 * time.Minute):
 		return "", fmt.Errorf("gave up waiting for the sign-in to finish")
 	}
-}
-
-func openBrowser(target string) {
-	var cmd string
-	var args []string
-	switch runtime.GOOS {
-	case "darwin":
-		cmd = "open"
-	case "windows":
-		cmd, args = "rundll32", []string{"url.dll,FileProtocolHandler"}
-	default:
-		cmd = "xdg-open"
-	}
-	_ = exec.Command(cmd, append(args, target)...).Start()
 }
 
 // emailIn reads the address out of an ID token, for showing who signed in.

@@ -132,8 +132,8 @@ class WhisperTranscriber:
             treat as a secret, and nothing about who may use this service.
             """
             return {
-                "client_id": os.environ["GOOGLE_CLIENT_ID"],
-                "client_secret": os.environ["GOOGLE_CLIENT_SECRET"],
+                "client_id": os.environ["GOOGLE_DEVICE_CLIENT_ID"],
+                "client_secret": os.environ["GOOGLE_DEVICE_CLIENT_SECRET"],
                 "auth_uri": "https://accounts.google.com/o/oauth2/v2/auth",
                 "token_uri": "https://oauth2.googleapis.com/token",
                 "scopes": ["openid", "email", "profile"],

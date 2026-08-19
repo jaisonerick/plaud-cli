@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 	"strings"
@@ -24,7 +25,17 @@ Only accounts on the domains the service serves are let in.`,
 var authLoginCmd = &cobra.Command{
 	Use:   "login",
 	Short: "Sign in with Google",
-	Args:  cobra.NoArgs,
+	Long: `Sign in to the transcription service.
+
+Prints a short code and a URL, then waits. Whoever is signing in opens that URL
+on any device — a phone will do — types the code, and this returns. Nothing
+here opens a browser or listens on a port, so it behaves the same in a
+terminal, over ssh, in a container, or driven by an assistant on somebody's
+behalf.
+
+With --json it prints one JSON object per line: the code first, so it can be
+shown immediately, and the outcome when the sign-in finishes.`,
+	Args: cobra.NoArgs,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		ctx := cmd.Context()
 
@@ -33,21 +44,76 @@ var authLoginCmd = &cobra.Command{
 			return err
 		}
 
-		session, err := auth.SignIn(ctx, cfg, os.Stderr)
+		if authBrowser {
+			session, err := auth.SignIn(ctx, cfg, os.Stderr)
+			if err != nil {
+				return err
+			}
+			return finishLogin(session, cfg)
+		}
+
+		pending, err := auth.StartDevice(ctx, cfg)
 		if err != nil {
 			return err
 		}
-		if err := auth.SaveSession(session); err != nil {
-			return fmt.Errorf("saving the sign-in: %w", err)
+
+		// Printed and flushed before the wait, because whoever is watching this
+		// output has to act on it for the wait to ever end.
+		if authJSON {
+			emit(map[string]any{
+				"status":           "pending",
+				"user_code":        pending.UserCode,
+				"verification_url": pending.VerificationURL,
+				"expires_in":       pending.ExpiresIn,
+			})
+		} else {
+			fmt.Printf("Open %s and enter this code:\n\n    %s\n\nWaiting...\n",
+				pending.VerificationURL, pending.UserCode)
 		}
 
-		fmt.Printf("Signed in as %s\n", session.Email)
-		if domain := domainOf(session.Email); len(cfg.Domains) > 0 && !contains(cfg.Domains, domain) {
-			fmt.Fprintf(os.Stderr, "Warning: the service serves %s, so this account will be refused.\n",
-				strings.Join(cfg.Domains, ", "))
+		session, err := auth.AwaitDevice(ctx, cfg, pending)
+		if err != nil {
+			if authJSON {
+				emit(map[string]any{"status": "failed", "error": err.Error()})
+			}
+			return err
 		}
-		return nil
+		return finishLogin(session, cfg)
 	},
+}
+
+// finishLogin stores the session and says who it belongs to.
+func finishLogin(session *auth.Session, cfg *auth.Config) error {
+	if err := auth.SaveSession(session); err != nil {
+		return fmt.Errorf("saving the sign-in: %w", err)
+	}
+
+	domain := domainOf(session.Email)
+	served := len(cfg.Domains) == 0 || contains(cfg.Domains, domain)
+
+	if authJSON {
+		emit(map[string]any{"status": "signed-in", "email": session.Email, "served": served})
+	} else {
+		fmt.Printf("Signed in as %s\n", session.Email)
+	}
+	if !served {
+		fmt.Fprintf(os.Stderr, "Warning: the service serves %s, so this account will be refused.\n",
+			strings.Join(cfg.Domains, ", "))
+	}
+	return nil
+}
+
+// emit writes one JSON object per line, so a caller can read the code without
+// waiting for the sign-in it is about to describe.
+func emit(event map[string]any) {
+	data, err := json.Marshal(event)
+	if err != nil {
+		return
+	}
+	fmt.Println(string(data))
+	// Flushed because the reader has to act on this line for the wait that
+	// follows it to ever end.
+	_ = os.Stdout.Sync()
 }
 
 var authStatusCmd = &cobra.Command{
@@ -103,7 +169,15 @@ func domainOf(email string) string {
 	return domain
 }
 
+var (
+	authJSON    bool
+	authBrowser bool
+)
+
 func init() {
+	authLoginCmd.Flags().BoolVar(&authJSON, "json", false, "print the code and the outcome as JSON, one object per line")
+	authLoginCmd.Flags().BoolVar(&authBrowser, "browser", false, "sign in through a browser on this machine instead")
+
 	authCmd.AddCommand(authLoginCmd)
 	authCmd.AddCommand(authStatusCmd)
 	authCmd.AddCommand(authLogoutCmd)

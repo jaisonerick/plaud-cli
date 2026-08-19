@@ -8,11 +8,10 @@ import (
 	"html/template"
 	"net"
 	"net/http"
-	"os/exec"
-	"runtime"
 	"sort"
 	"time"
 
+	"github.com/jaisonerick/plaud-cli/internal/browser"
 	"github.com/jaisonerick/plaud-cli/internal/transcript"
 )
 
@@ -35,7 +34,7 @@ type SpeakerInfo struct {
 type Config struct {
 	AudioData []byte
 	AudioID   string
-	Speakers  map[string]string    // full speaker map from transcription
+	Speakers  map[string]string // full speaker map from transcription
 	Segments  []transcript.Segment
 }
 
@@ -109,7 +108,7 @@ func RunServer(ctx context.Context, cfg Config) (*Result, error) {
 
 	url := fmt.Sprintf("http://127.0.0.1:%d", port)
 	fmt.Printf("Opening browser at %s\n", url)
-	openBrowser(url)
+	browser.Open(url)
 
 	select {
 	case result := <-resultCh:
@@ -175,15 +174,4 @@ func buildSpeakerInfo(unresolvedIDs []string, segments []transcript.Segment) []S
 	}
 
 	return speakers
-}
-
-func openBrowser(url string) {
-	switch runtime.GOOS {
-	case "darwin":
-		exec.Command("open", url).Start()
-	case "linux":
-		exec.Command("xdg-open", url).Start()
-	case "windows":
-		exec.Command("rundll32", "url.dll,FileProtocolHandler", url).Start()
-	}
 }

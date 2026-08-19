@@ -36,7 +36,7 @@ def identify(authorization: str | None) -> Identity:
     if scheme.lower() != "bearer" or not token.strip():
         raise Unauthorized("expected an 'Authorization: Bearer <token>' header")
 
-    client_id = os.environ.get("GOOGLE_CLIENT_ID", "")
+    client_id = os.environ.get("GOOGLE_DEVICE_CLIENT_ID", "")
     if not client_id:
         # Verifying without an audience would accept a token minted for any
         # application at all, so refuse rather than degrade.
