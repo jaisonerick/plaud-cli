@@ -160,6 +160,32 @@ func (c *HTTPClient) EnrollSpeakers(ctx context.Context, audioData []byte, speak
 	return &result, nil
 }
 
+// RenameKnownSpeaker moves every sample of one spelling onto another.
+func (c *HTTPClient) RenameKnownSpeaker(ctx context.Context, old, new string) (int, error) {
+	var buf bytes.Buffer
+	writer := multipart.NewWriter(&buf)
+	if err := writer.WriteField("old", old); err != nil {
+		return 0, fmt.Errorf("writing old name field: %w", err)
+	}
+	if err := writer.WriteField("new", new); err != nil {
+		return 0, fmt.Errorf("writing new name field: %w", err)
+	}
+	writer.Close()
+
+	req, err := c.request(ctx, http.MethodPatch, "/speakers", writer.FormDataContentType(), &buf)
+	if err != nil {
+		return 0, err
+	}
+
+	var result struct {
+		Moved int `json:"moved"`
+	}
+	if err := c.do(req, &result); err != nil {
+		return 0, err
+	}
+	return result.Moved, nil
+}
+
 // ListKnownSpeakers returns every voice the server recognises.
 func (c *HTTPClient) ListKnownSpeakers(ctx context.Context) ([]KnownSpeaker, error) {
 	req, err := c.request(ctx, http.MethodGet, "/speakers", "", nil)

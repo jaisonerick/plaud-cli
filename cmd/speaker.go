@@ -36,8 +36,8 @@ Example:
 		ctx := cmd.Context()
 		path, label, name := args[0], args[1], strings.TrimSpace(args[2])
 
-		if name == "" {
-			return fmt.Errorf("the name cannot be empty")
+		if err := requireFullName(name); err != nil {
+			return err
 		}
 
 		whisper, err := whisperClient()
@@ -90,6 +90,18 @@ Example:
 		fmt.Printf("%s is now %q (%d voice sample(s) on file)\n", label, name, samples)
 		return nil
 	},
+}
+
+// requireFullName keeps a lone first name out of a store shared with everyone
+// else using the service, where "Amanda" identifies nobody in particular.
+func requireFullName(name string) error {
+	if name == "" {
+		return fmt.Errorf("the name cannot be empty")
+	}
+	if !speaker.IsFull(name) {
+		return fmt.Errorf("%q is a first name — give the full name, so the voice means the same person to everyone using the service", name)
+	}
+	return nil
 }
 
 // confirmName asks before a new spelling of an existing person is created,
@@ -174,16 +186,57 @@ var speakerListCmd = &cobra.Command{
 			return nil
 		}
 
+		partial := 0
 		fmt.Println("Known speakers:")
 		for _, s := range speakers {
-			fmt.Printf("  %-30s %d sample(s)\n", s.Name, s.Samples)
+			mark := " "
+			if !speaker.IsFull(s.Name) {
+				mark = "!"
+				partial++
+			}
+			fmt.Printf("%s %-30s %d sample(s)\n", mark, s.Name, s.Samples)
 		}
+		if partial > 0 {
+			fmt.Printf("\n%d marked ! are known by a first name only; 'plaud speaker rename' gives them a full one.\n", partial)
+		}
+		return nil
+	},
+}
+
+var speakerRenameCmd = &cobra.Command{
+	Use:   "rename <old-name> <full-name>",
+	Short: "Give a known speaker their full name",
+	Long: `Move every voice sample stored under one name onto another.
+
+Use it to replace a first name with the full one, so a voice means the same
+person to everyone using the service, and to join two spellings of one person
+whose samples were split between them.
+
+Example:
+  plaud speaker rename "Vic" "Victoria Dinie"`,
+	Args: cobra.ExactArgs(2),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		old, full := args[0], strings.TrimSpace(args[1])
+		if err := requireFullName(full); err != nil {
+			return err
+		}
+
+		whisper, err := whisperClient()
+		if err != nil {
+			return err
+		}
+		moved, err := whisper.RenameKnownSpeaker(cmd.Context(), old, full)
+		if err != nil {
+			return fmt.Errorf("renaming speaker: %w", err)
+		}
+		fmt.Printf("Moved %d voice sample(s) from %q to %q\n", moved, old, full)
 		return nil
 	},
 }
 
 func init() {
 	speakerCmd.AddCommand(speakerNameCmd)
+	speakerCmd.AddCommand(speakerRenameCmd)
 	speakerCmd.AddCommand(speakerSetCmd)
 	speakerCmd.AddCommand(speakerListCmd)
 	speakerCmd.AddCommand(speakerEnrollCmd)

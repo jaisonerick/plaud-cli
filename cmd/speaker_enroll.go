@@ -10,6 +10,8 @@ import (
 	"strings"
 	"sync"
 
+	"path/filepath"
+
 	"github.com/jaisonerick/plaud-cli/internal/api"
 	"github.com/jaisonerick/plaud-cli/internal/modal"
 	"github.com/jaisonerick/plaud-cli/internal/speaker"
@@ -78,8 +80,16 @@ Examples:
 			return err
 		}
 
+		samples, incomplete, err := resolveFullNames(samples)
+		if err != nil {
+			return err
+		}
+
 		byRecording, chosen := selectSamples(samples)
 		reportPlan(samples, chosen)
+		if err := reportIncomplete(incomplete); err != nil {
+			return err
+		}
 		byRecording = applyLimit(byRecording)
 
 		if enrollDryRun {
@@ -266,6 +276,64 @@ func askMerge(name string, samples []voiceSample, matches []speaker.Match) (stri
 		}
 		return matches[choice-1].Name, nil
 	}
+}
+
+// aliasesPath is where the answers to "who is 'luca'?" are kept.
+func aliasesPath() (string, error) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(home, ".config", "plaud", speaker.AliasesFile), nil
+}
+
+// resolveFullNames maps each spelling through the aliases file and sets aside
+// whoever is still known only by a first name. The store is shared with anyone
+// else using the service, and "Amanda" there is whichever Amanda the person
+// who wrote it had in mind.
+func resolveFullNames(samples map[string][]voiceSample) (map[string][]voiceSample, []string, error) {
+	path, err := aliasesPath()
+	if err != nil {
+		return nil, nil, err
+	}
+	aliases, err := speaker.LoadAliases(path)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	full := map[string][]voiceSample{}
+	var incomplete []string
+
+	for name, found := range samples {
+		resolved := aliases.Resolve(name)
+		if !speaker.IsFull(resolved) {
+			incomplete = append(incomplete, name)
+			continue
+		}
+		full[resolved] = append(full[resolved], found...)
+	}
+	sort.Strings(incomplete)
+	return full, incomplete, nil
+}
+
+// reportIncomplete writes the names still owed a full spelling into the aliases
+// file, so answering them is editing one file rather than hunting transcripts.
+func reportIncomplete(incomplete []string) error {
+	if len(incomplete) == 0 {
+		return nil
+	}
+	path, err := aliasesPath()
+	if err != nil {
+		return err
+	}
+	blank, err := speaker.WriteTemplate(path, incomplete)
+	if err != nil {
+		return err
+	}
+
+	fmt.Printf("\nLeft out, known only by a first name: %s\n", strings.Join(incomplete, ", "))
+	fmt.Printf("Write their full names into %s (%d still blank) and run this again.\n", path, blank)
+	return nil
 }
 
 // selectSamples keeps the recordings where each person speaks most, then groups

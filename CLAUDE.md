@@ -92,7 +92,11 @@ Every Whisper transcription writes a `.speakers.json` beside it, holding the emb
 - `speaker name <transcript> <label> <name>` names one voice from a saved transcript and its speaker file.
 - `speaker set` names one the server still holds an embedding for, and stops working once it no longer does.
 
-A new name is checked against the known ones before being created. Two spellings of one person are two people to everything mechanical, and the samples they split can never be rejoined by anything but a human saying which is which.
+The store holds full names only. A lone first name identifies whichever Amanda the person typing it had in mind, and the store is shared with everyone using the service, so `speaker name` and `speaker rename` refuse anything shorter and `speaker list` marks the ones already stored that way.
+
+Transcripts call people whatever the person typing felt like, and only somebody who knows them can say who "luca" or "Vic" is. `~/.config/plaud/speaker-names.json` maps those spellings to full names; `speaker enroll` reads it, leaves out whoever is still unresolved, and writes the outstanding ones back into that file to be filled in.
+
+A new name is also checked against the known ones before being created. Two spellings of one person are two people to everything mechanical, and the samples they split can only be rejoined by `speaker rename`.
 
 Enrollment embeds with the model the diarization pipeline itself uses (`services/whisper/modal_whisper/embed.py`). Under any other model, enrolled and diarized voices land in different spaces, where nothing ever matches and nothing ever reports an error.
 

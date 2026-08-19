@@ -14,6 +14,7 @@ A FastAPI app behind Modal proxy auth. Callers send `Modal-Key` and `Modal-Secre
 | `PUT /speakers/{audio_id}/{speaker_id}` | Name a diarized speaker the store still holds, from a transcription it has not yet forgotten. |
 | `POST /speakers` | Name a voice from an embedding the caller supplies, which is how a transcript already on disk names its speakers. |
 | `POST /speakers/enroll` | Learn voices from a recording someone already attributed: multipart `audio` plus `speakers`, `[{"name": str, "ranges": [[start_ms, end_ms], ...]}]`. |
+| `PATCH /speakers` | Move every sample of one name onto another, which is how two spellings of one person are rejoined. |
 | `GET /speakers` | The voices known, each with how many samples back it. |
 
 `options` accepts `language`, `context_doc`, `diarize`, `speaker_recognition`, `speaker_threshold`, `polish`, `compact` and `compact_gap`. `internal/modal/http.go` is the Go client for all three routes, and `modal_whisper/builder.py` runs the stages.

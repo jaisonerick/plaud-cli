@@ -183,6 +183,21 @@ class WhisperTranscriber:
             await speaker_volume.commit.aio()
             return {"name": name, "samples": samples}
 
+        @web_app.patch("/speakers")
+        async def rename_known_speaker(old: str = Form(...), new: str = Form(...)):
+            """Move every sample of one spelling onto another.
+
+            Samples split across two spellings of one person can only be
+            rejoined by someone who knows they are the same person.
+            """
+            store = await open_speaker_store()
+            moved = store.rename_known_speaker(old, new)
+            store.close()
+            if moved == 0:
+                raise HTTPException(status_code=404, detail=f"no speaker named {old!r}")
+            await speaker_volume.commit.aio()
+            return {"old": old, "new": new, "moved": moved}
+
         @web_app.post("/speakers/enroll")
         async def enroll_speakers(
             audio: UploadFile = File(...), speakers: str = Form(...)

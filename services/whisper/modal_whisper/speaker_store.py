@@ -68,6 +68,14 @@ class SpeakerStore:
         rows = self._conn.execute("SELECT id, name, embedding FROM known_speakers").fetchall()
         return [(row_id, name, _unpack(blob)) for row_id, name, blob in rows]
 
+    def rename_known_speaker(self, old: str, new: str) -> int:
+        """Move every sample of one name onto another. Returns how many moved."""
+        cursor = self._conn.execute(
+            "UPDATE known_speakers SET name = ? WHERE name = ?", (new, old)
+        )
+        self._conn.commit()
+        return cursor.rowcount
+
     def get_known_speaker_counts(self) -> list[tuple[str, int]]:
         """Return each known speaker with how many samples back it, commonest first."""
         rows = self._conn.execute(

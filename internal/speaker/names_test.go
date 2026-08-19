@@ -67,3 +67,16 @@ func TestSimilarKeepsShortNamesApart(t *testing.T) {
 		t.Errorf("Similar(Luiz) = %v, want nothing", matches)
 	}
 }
+
+func TestIsFullWantsMoreThanAFirstName(t *testing.T) {
+	for _, name := range []string{"Jaison Erick", "Amanda Destro", "Priscilla - Dinie", "rodrigo silva", "Urias Hobaik - Afinz"} {
+		if !IsFull(name) {
+			t.Errorf("IsFull(%q) = false, want true", name)
+		}
+	}
+	for _, name := range []string{"Amanda", "luca", "Vic", "Tom", "Zeni", "  Cintia  ", ""} {
+		if IsFull(name) {
+			t.Errorf("IsFull(%q) = true, want false", name)
+		}
+	}
+}
