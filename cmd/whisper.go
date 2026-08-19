@@ -7,6 +7,7 @@ import (
 
 	"github.com/jaisonerick/plaud-cli/internal/modal"
 	"github.com/jaisonerick/plaud-cli/internal/progress"
+	"github.com/jaisonerick/plaud-cli/internal/transcript"
 )
 
 // whisperClient resolves the Modal credentials that transcription needs.
@@ -93,11 +94,7 @@ func whisperTranscribe(ctx context.Context, w io.Writer, whisper *modal.HTTPClie
 			tracker.Update(e)
 
 		case "result":
-			result = &modal.TranscribeResult{
-				AudioID:  evt.AudioID,
-				Segments: evt.Segments,
-				Speakers: evt.Speakers,
-			}
+			result = evt.Result()
 
 		case "error":
 			return fail(fmt.Errorf("transcription failed at %s: %s", evt.Stage, evt.Message))
@@ -117,4 +114,17 @@ func whisperTranscribe(ctx context.Context, w io.Writer, whisper *modal.HTTPClie
 	tracker.Abort()
 	tracker.Wait()
 	return result, audioData, nil
+}
+
+// saveWhisperTranscript writes a transcript and, beside it, the voices that
+// spoke it. The embeddings ride along so that naming a speaker later needs
+// only the saved file — no audio to send again, nothing kept on the server.
+func saveWhisperTranscript(result *modal.TranscribeResult, format, dest string) error {
+	if err := saveTranscript(result.Segments, format, dest); err != nil {
+		return err
+	}
+	return transcript.WriteSpeakerFile(
+		transcript.SpeakerSidecarPath(dest),
+		transcript.NewSpeakerFile(result.AudioID, result.Speakers, result.Embeddings),
+	)
 }

@@ -54,37 +54,51 @@ func LoadHTTPClient(savedTokenID, savedTokenSecret, savedEndpoint string) *HTTPC
 
 // TranscribeOpts holds options for the transcription request.
 type TranscribeOpts struct {
-	Diarize            bool   `json:"diarize"`
-	Polish             bool   `json:"polish"`
-	Compact            bool   `json:"compact"`
-	CompactGap         int    `json:"compact_gap"`
-	Language           string `json:"language,omitempty"`
-	ContextDoc         string `json:"context_doc,omitempty"`
-	SpeakerRecognition bool   `json:"speaker_recognition"`
+	Diarize            bool    `json:"diarize"`
+	Polish             bool    `json:"polish"`
+	Compact            bool    `json:"compact"`
+	CompactGap         int     `json:"compact_gap"`
+	Language           string  `json:"language,omitempty"`
+	ContextDoc         string  `json:"context_doc,omitempty"`
+	SpeakerRecognition bool    `json:"speaker_recognition"`
 	SpeakerThreshold   float64 `json:"speaker_threshold,omitempty"`
 }
 
 // TranscribeResult holds the structured response from a transcription.
 type TranscribeResult struct {
-	AudioID  string              `json:"audio_id"`
-	Segments []transcript.Segment `json:"segments"`
-	Speakers map[string]string   `json:"speakers"`
+	AudioID    string               `json:"audio_id"`
+	Segments   []transcript.Segment `json:"segments"`
+	Speakers   map[string]string    `json:"speakers"`
+	Embeddings map[string][]float64 `json:"embeddings"`
 }
 
 // SSEEvent represents a parsed server-sent event.
 type SSEEvent struct {
-	Type     string           `json:"type"` // "init", "update", "result", "error"
+	Type     string              `json:"type"` // "init", "update", "result", "error"
 	Stages   []progress.StageDef `json:"stages,omitempty"`
-	Stage    string           `json:"stage,omitempty"`
-	Status   string           `json:"status,omitempty"`
-	Detail   *string          `json:"detail,omitempty"`
-	Progress *SSEProgress     `json:"progress,omitempty"`
+	Stage    string              `json:"stage,omitempty"`
+	Status   string              `json:"status,omitempty"`
+	Detail   *string             `json:"detail,omitempty"`
+	Progress *SSEProgress        `json:"progress,omitempty"`
 	// Result fields (embedded when type == "result")
-	AudioID  string              `json:"audio_id,omitempty"`
-	Segments []transcript.Segment `json:"segments,omitempty"`
-	Speakers map[string]string   `json:"speakers,omitempty"`
+	AudioID    string               `json:"audio_id,omitempty"`
+	Segments   []transcript.Segment `json:"segments,omitempty"`
+	Speakers   map[string]string    `json:"speakers,omitempty"`
+	Embeddings map[string][]float64 `json:"embeddings,omitempty"`
 	// Error fields
 	Message string `json:"message,omitempty"`
+}
+
+// Result is the finished transcription an event of type "result" carries.
+// It exists so that every field the server sends is copied in one place: a
+// field added to the wire and forgotten here goes missing without a sound.
+func (e SSEEvent) Result() *TranscribeResult {
+	return &TranscribeResult{
+		AudioID:    e.AudioID,
+		Segments:   e.Segments,
+		Speakers:   e.Speakers,
+		Embeddings: e.Embeddings,
+	}
 }
 
 // SSEProgress represents a progress counter.
@@ -318,68 +332,4 @@ func classifyServerError(status int, body []byte) error {
 		}
 		return fmt.Errorf("server returned status %d: %s", status, raw)
 	}
-}
-
-// SetSpeakerName registers a speaker embedding under a name.
-func (c *HTTPClient) SetSpeakerName(ctx context.Context, audioID, speakerID, name string) error {
-	var buf bytes.Buffer
-	writer := multipart.NewWriter(&buf)
-	if err := writer.WriteField("name", name); err != nil {
-		return fmt.Errorf("writing name field: %w", err)
-	}
-	writer.Close()
-
-	url := fmt.Sprintf("%s/speakers/%s/%s", strings.TrimRight(c.EndpointURL, "/"), audioID, speakerID)
-	req, err := http.NewRequestWithContext(ctx, http.MethodPut, url, &buf)
-	if err != nil {
-		return fmt.Errorf("creating request: %w", err)
-	}
-	req.Header.Set("Content-Type", writer.FormDataContentType())
-	req.Header.Set("Modal-Key", c.TokenID)
-	req.Header.Set("Modal-Secret", c.TokenSecret)
-
-	resp, err := c.HTTP.Do(req)
-	if err != nil {
-		return fmt.Errorf("sending request: %w", err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode == http.StatusNotFound {
-		return fmt.Errorf("no embedding found for %s/%s", audioID, speakerID)
-	}
-	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(resp.Body)
-		return fmt.Errorf("server returned status %d: %s", resp.StatusCode, string(body))
-	}
-
-	return nil
-}
-
-// ListKnownSpeakers returns the list of known speaker names.
-func (c *HTTPClient) ListKnownSpeakers(ctx context.Context) ([]string, error) {
-	url := strings.TrimRight(c.EndpointURL, "/") + "/speakers"
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
-	if err != nil {
-		return nil, fmt.Errorf("creating request: %w", err)
-	}
-	req.Header.Set("Modal-Key", c.TokenID)
-	req.Header.Set("Modal-Secret", c.TokenSecret)
-
-	resp, err := c.HTTP.Do(req)
-	if err != nil {
-		return nil, fmt.Errorf("sending request: %w", err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(resp.Body)
-		return nil, fmt.Errorf("server returned status %d: %s", resp.StatusCode, string(body))
-	}
-
-	var speakers []string
-	if err := json.NewDecoder(resp.Body).Decode(&speakers); err != nil {
-		return nil, fmt.Errorf("parsing response: %w", err)
-	}
-
-	return speakers, nil
 }

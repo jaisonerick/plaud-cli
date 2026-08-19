@@ -38,6 +38,7 @@ class WhisperTranscriber:
     def setup(self):
         """Load expensive resources once — never mutated after this."""
         from modal_whisper.model import WhisperModel
+        from modal_whisper.embed import SpeakerEmbedder
         from modal_whisper.llm import LLMClient
         from modal_whisper.prompts import set_prompts_dir
 
@@ -50,6 +51,10 @@ class WhisperTranscriber:
             model_name="large-v3",
         )
         self.whisper_model.load()
+
+        self.embedder = SpeakerEmbedder(
+            device="cuda", hf_token=os.environ.get("HF_TOKEN", "")
+        )
 
         self.llm = LLMClient(
             model="openrouter/anthropic/claude-sonnet-5",
@@ -137,9 +142,63 @@ class WhisperTranscriber:
             from modal_whisper.speaker_store import SpeakerStore
 
             store = SpeakerStore()
-            names = store.get_known_speaker_names()
+            counts = store.get_known_speaker_counts()
             store.close()
-            return names
+            return [{"name": name, "samples": n} for name, n in counts]
+
+        @web_app.post("/speakers")
+        async def add_known_speaker(name: str = Form(...), embedding: str = Form(...)):
+            """Register a voice from an embedding the caller already holds.
+
+            This is what lets a speaker be named from a saved transcript: the
+            embedding rode along in the file, so there is nothing here to look
+            up and no audio to upload again.
+            """
+            from modal_whisper.speaker_store import SpeakerStore
+
+            vector = json.loads(embedding)
+            if not isinstance(vector, list) or not vector:
+                raise HTTPException(
+                    status_code=400, detail="embedding must be a non-empty array"
+                )
+
+            store = SpeakerStore()
+            store.set_known_speaker(name, vector)
+            samples = dict(store.get_known_speaker_counts()).get(name, 1)
+            store.close()
+            model_cache.commit()
+            return {"name": name, "samples": samples}
+
+        @web_app.post("/speakers/enroll")
+        async def enroll_speakers(
+            audio: UploadFile = File(...), speakers: str = Form(...)
+        ):
+            """Register voices from a recording somebody already attributed.
+
+            `speakers` is [{"name": str, "ranges": [[start_ms, end_ms], ...]}].
+            """
+            from modal_whisper.speaker_store import SpeakerStore
+            from modal_whisper.transcribe import load_audio
+
+            spec = json.loads(speakers)
+            audio_array = load_audio(await audio.read())
+
+            store = SpeakerStore()
+            enrolled, skipped = {}, {}
+            try:
+                for entry in spec:
+                    name = entry["name"]
+                    ranges = [(int(a), int(b)) for a, b in entry["ranges"]]
+                    vector = self.embedder.embed(audio_array, ranges)
+                    if vector is None:
+                        skipped[name] = "too little speech to characterise a voice"
+                        continue
+                    store.set_known_speaker(name, vector)
+                    enrolled[name] = len(vector)
+            finally:
+                store.close()
+            model_cache.commit()
+            return {"enrolled": enrolled, "skipped": skipped}
 
         return web_app
 

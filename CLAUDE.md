@@ -82,6 +82,20 @@ Speaker recognition stays off on the fallback path: naming a speaker needs a per
 
 The GPU container is scaled to zero between jobs, so every run pays a cold start before its first stage reports, and `sync` says how many recordings it is about to send before the first one starts.
 
+## Speaker Recognition
+
+Diarization separates voices and calls them `SPEAKER_00`, `SPEAKER_01`. Recognition turns those into names, by comparing each voice against samples of people already learned.
+
+Every Whisper transcription writes a `.speakers.json` beside it, holding the embedding of each label. That file is what lets a speaker be named from a transcript found on disk weeks later: the voice travels with the transcript, so naming needs no audio and nothing kept on the server.
+
+- `speaker enroll` learns from the Plaud transcripts that already name their speakers, which is the one bulk source of labelled voice this account has. It reads every transcript, picks the recordings where each person speaks most, and sends only those stretches.
+- `speaker name <transcript> <label> <name>` names one voice from a saved transcript and its speaker file.
+- `speaker set` names one the server still holds an embedding for, and stops working once it no longer does.
+
+A new name is checked against the known ones before being created. Two spellings of one person are two people to everything mechanical, and the samples they split can never be rejoined by anything but a human saying which is which.
+
+Enrollment embeds with the model the diarization pipeline itself uses (`services/whisper/modal_whisper/embed.py`). Under any other model, enrolled and diarized voices land in different spaces, where nothing ever matches and nothing ever reports an error.
+
 ## Config Files
 
 All stored in `~/.config/plaud/` with 0600 permissions:
@@ -89,3 +103,5 @@ All stored in `~/.config/plaud/` with 0600 permissions:
 - `sync-state.json` — Incremental sync tracking
 - `update-state.json` — Version check cache
 - `cache/transcripts/` — Local transcript cache
+
+A transcript's speakers live beside the transcript, not here: `transcript.md` is accompanied by `transcript.speakers.json`.

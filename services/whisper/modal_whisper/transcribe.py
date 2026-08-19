@@ -8,6 +8,18 @@ import whisperx
 from .model import WhisperModel
 
 
+def load_audio(audio_data: bytes):
+    """Decode audio bytes into the 16kHz array every stage here works on."""
+    with tempfile.NamedTemporaryFile(suffix=".mp3", delete=False) as f:
+        f.write(audio_data)
+        audio_path = f.name
+
+    try:
+        return whisperx.load_audio(audio_path)
+    finally:
+        os.unlink(audio_path)
+
+
 class TranscribeSession:
     """Per-request: created in transcribe_stream(), garbage collected after.
 
@@ -34,15 +46,7 @@ class TranscribeSession:
         self.audio = None
 
     def load_audio(self, audio_data: bytes):
-        """Write audio bytes to a temp file and load via whisperx."""
-        with tempfile.NamedTemporaryFile(suffix=".mp3", delete=False) as f:
-            f.write(audio_data)
-            audio_path = f.name
-
-        try:
-            self.audio = whisperx.load_audio(audio_path)
-        finally:
-            os.unlink(audio_path)
+        self.audio = load_audio(audio_data)
 
     def run(self, language: str = "") -> dict:
         """Transcribe loaded audio. Returns whisperx result dict with segments."""

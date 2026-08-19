@@ -11,12 +11,16 @@ A FastAPI app behind Modal proxy auth. Callers send `Modal-Key` and `Modal-Secre
 | Route | Purpose |
 | --- | --- |
 | `POST /transcribe` | Multipart `audio` plus an `options` JSON field. `?stream=true` returns the pipeline's progress as server-sent events, ending in a `result` event. |
-| `PUT /speakers/{audio_id}/{speaker_id}` | Store the embedding of a diarized speaker under a name, so later transcriptions recognise them. |
-| `GET /speakers` | The names already stored. |
+| `PUT /speakers/{audio_id}/{speaker_id}` | Name a diarized speaker the store still holds, from a transcription it has not yet forgotten. |
+| `POST /speakers` | Name a voice from an embedding the caller supplies, which is how a transcript already on disk names its speakers. |
+| `POST /speakers/enroll` | Learn voices from a recording someone already attributed: multipart `audio` plus `speakers`, `[{"name": str, "ranges": [[start_ms, end_ms], ...]}]`. |
+| `GET /speakers` | The voices known, each with how many samples back it. |
 
 `options` accepts `language`, `context_doc`, `diarize`, `speaker_recognition`, `speaker_threshold`, `polish`, `compact` and `compact_gap`. `internal/modal/http.go` is the Go client for all three routes, and `modal_whisper/builder.py` runs the stages.
 
-Segments follow `segment_schema.json`, shared with the Go `Segment` struct.
+Segments follow `segment_schema.json`, shared with the Go `Segment` struct. A diarized result also carries `embeddings`, one 256-dimension vector per speaker label, which is what lets the caller name a voice long after the recording was processed.
+
+Enrollment embeds through `modal_whisper/embed.py`, pinned to the model the diarization pipeline uses internally. Enrolling under any other model places those vectors in a space the diarized ones are never compared against successfully, and nothing about that failure is visible except that recognition stops working.
 
 ## Deploy
 

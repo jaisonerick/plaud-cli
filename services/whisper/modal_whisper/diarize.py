@@ -5,6 +5,16 @@ import torch
 from whisperx.diarize import DiarizationPipeline, assign_word_speakers
 
 
+def _as_vectors(embeddings) -> dict[str, list[float]] | None:
+    """Normalise the pipeline's arrays into plain lists, which travel as JSON."""
+    if embeddings is None:
+        return None
+    return {
+        str(speaker): [float(value) for value in vector]
+        for speaker, vector in dict(embeddings).items()
+    }
+
+
 class DiarizeResult:
     """Result of diarization containing segments and optional embeddings."""
 
@@ -36,6 +46,7 @@ class Diarizer:
             # whisperx returns (df, embeddings_dict) when return_embeddings=True
             if isinstance(result, tuple):
                 segments, embeddings = result
+                embeddings = _as_vectors(embeddings)
             else:
                 segments = result
                 embeddings = None

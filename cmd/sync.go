@@ -178,7 +178,7 @@ Examples:
 					hasError = true
 				} else {
 					dest := filepath.Join(recDir, "transcript"+transcript.Ext(syncFormat))
-					if err := saveTranscript(result.Segments, syncFormat, dest); err != nil {
+					if err := saveWhisperTranscript(result, syncFormat, dest); err != nil {
 						fmt.Fprintf(os.Stderr, "  Error writing transcript for %s: %v\n", r.Name, err)
 						hasError = true
 					}

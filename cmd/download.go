@@ -120,7 +120,7 @@ Examples:
 				if err != nil {
 					return err
 				}
-				if err := saveTranscript(result.Segments, dlFormat, dest); err != nil {
+				if err := saveWhisperTranscript(result, dlFormat, dest); err != nil {
 					return err
 				}
 				fmt.Printf("Transcript saved to %s\n", dest)

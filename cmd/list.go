@@ -177,10 +177,14 @@ func filterRecordings(recordings []api.RecordingSimple, tagMap, tagNameToID map[
 }
 
 func truncate(s string, max int) string {
-	if len(s) <= max {
+	r := []rune(s)
+	if len(r) <= max {
 		return s
 	}
-	return s[:max-3] + "..."
+	if max <= 3 {
+		return string(r[:max])
+	}
+	return string(r[:max-3]) + "..."
 }
 
 func init() {

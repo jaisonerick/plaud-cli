@@ -65,10 +65,12 @@ class SpeakerStore:
         rows = self._conn.execute("SELECT id, name, embedding FROM known_speakers").fetchall()
         return [(row_id, name, _unpack(blob)) for row_id, name, blob in rows]
 
-    def get_known_speaker_names(self) -> list[str]:
-        """Return distinct known speaker names."""
-        rows = self._conn.execute("SELECT DISTINCT name FROM known_speakers").fetchall()
-        return [name for (name,) in rows]
+    def get_known_speaker_counts(self) -> list[tuple[str, int]]:
+        """Return each known speaker with how many samples back it, commonest first."""
+        rows = self._conn.execute(
+            "SELECT name, COUNT(*) FROM known_speakers GROUP BY name ORDER BY COUNT(*) DESC, name"
+        ).fetchall()
+        return [(name, count) for name, count in rows]
 
     def close(self):
         self._conn.close()

@@ -224,12 +224,15 @@ class TranscriptionPipeline:
                 segments = polished
                 yield _update("polish", "done", detail=f"{total_chunks} chunks")
 
-        # Final result
+        # Final result. The embeddings travel with the transcript so a speaker
+        # can be named later from the saved file alone, with nothing on this
+        # side to look up and no audio to send again.
         yield {
             "type": "result",
             "audio_id": audio_id,
             "segments": segments,
             "speakers": speaker_map,
+            "embeddings": speaker_embeddings or {},
         }
 
     def transcribe(self, audio_data: bytes, opts: TranscribeOptions) -> dict:

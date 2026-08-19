@@ -90,7 +90,7 @@ Examples:
 		}
 
 		dest := filepath.Join(trOutputDir, baseName+"_whisper"+transcript.Ext(trFormat))
-		if err := saveTranscript(result.Segments, trFormat, dest); err != nil {
+		if err := saveWhisperTranscript(result, trFormat, dest); err != nil {
 			return err
 		}
 		fmt.Fprintf(os.Stderr, "\nSaved to %s\n", dest)
@@ -171,7 +171,7 @@ Examples:
 			result.Speakers[sid] = name
 		}
 		applySpeakerNames(result.Segments, result.Speakers)
-		if err := saveTranscript(result.Segments, trFormat, dest); err != nil {
+		if err := saveWhisperTranscript(result, trFormat, dest); err != nil {
 			fmt.Fprintf(os.Stderr, "  Warning: failed to update transcript: %v\n", err)
 		} else {
 			fmt.Fprintf(os.Stderr, "  Updated %s\n", dest)
