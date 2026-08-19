@@ -96,6 +96,8 @@ A new name is checked against the known ones before being created. Two spellings
 
 Enrollment embeds with the model the diarization pipeline itself uses (`services/whisper/modal_whisper/embed.py`). Under any other model, enrolled and diarized voices land in different spaces, where nothing ever matches and nothing ever reports an error.
 
+The voices live in a SQLite file on a Modal volume, and a container serves whatever view of that volume it last loaded. Writing without reloading first publishes the database as it looked before someone else's write, undoing it while reporting success. Every path that touches a voice goes through `open_speaker_store()` for that reason.
+
 ## Config Files
 
 All stored in `~/.config/plaud/` with 0600 permissions:
