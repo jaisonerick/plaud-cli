@@ -21,15 +21,17 @@ func whisperClient() (*modal.HTTPClient, error) {
 
 // whisperDefaults are the options for a transcription nobody configured, which
 // is what sync and download run when Plaud holds no transcript of its own.
-// Speaker recognition stays off: naming speakers needs a person at a browser,
-// and these two commands run over a whole library unattended.
+// Recognising a voice only compares it against ones already learned, so it
+// needs nobody present. Teaching it a new one is what needs a person, and that
+// is what 'speaker name' and 'speaker enroll' are for.
 func whisperDefaults(language string) modal.TranscribeOpts {
 	return modal.TranscribeOpts{
-		Diarize:    true,
-		Polish:     true,
-		Compact:    true,
-		CompactGap: 2000,
-		Language:   language,
+		Diarize:            true,
+		Polish:             true,
+		Compact:            true,
+		CompactGap:         2000,
+		Language:           language,
+		SpeakerRecognition: true,
 	}
 }
 

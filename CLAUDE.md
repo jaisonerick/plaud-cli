@@ -78,7 +78,7 @@ Plaud issues no new transcripts for this account, so Whisper on Modal is the onl
 
 `generate` asks Plaud to transcribe and needs the credits the account no longer has.
 
-Speaker recognition stays off on the fallback path: naming a speaker needs a person at a browser, and `sync` runs over the whole library unattended. `transcribe --identify` is where names get attached.
+`sync` and `download` transcribe with speaker recognition on, which only matches against voices already learned and so needs nobody present. Teaching a new voice is the part that needs a person: `speaker name` for one, `speaker enroll` for a library's worth.
 
 The GPU container is scaled to zero between jobs, so every run pays a cold start before its first stage reports, and `sync` says how many recordings it is about to send before the first one starts.
 
