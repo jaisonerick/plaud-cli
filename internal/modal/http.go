@@ -306,6 +306,11 @@ func classifyServerError(status int, body []byte) error {
 	if status == http.StatusUnauthorized || status == http.StatusForbidden {
 		return fmt.Errorf("the service refused the sign-in: %s", detailOf(body))
 	}
+	// The service explains a refusal in words meant for whoever typed the
+	// command; repeating the status code over them helps nobody.
+	if status == http.StatusNotFound || status == http.StatusBadRequest {
+		return fmt.Errorf("%s", detailOf(body))
+	}
 
 	bodyStr := strings.ToLower(string(body))
 
