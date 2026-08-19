@@ -52,7 +52,7 @@ class WhisperTranscriber:
         self.whisper_model.load()
 
         self.llm = LLMClient(
-            model="openrouter/anthropic/claude-sonnet-4",
+            model="openrouter/anthropic/claude-sonnet-5",
             api_key=os.environ["OPENROUTER_API_KEY"],
         )
 
@@ -92,6 +92,10 @@ class WhisperTranscriber:
                     try:
                         for event in pipeline.transcribe_stream(audio_data, opts):
                             yield f"data: {json.dumps(event)}\n\n"
+                    except Exception as err:
+                        # Without this the stream just stops, and the client is
+                        # left to guess why from a truncated response.
+                        yield f"data: {json.dumps(_error_event(err))}\n\n"
                     finally:
                         model_cache.commit()
 
@@ -138,3 +142,11 @@ class WhisperTranscriber:
             return names
 
         return web_app
+
+
+def _error_event(err: Exception) -> dict:
+    """Render an exception as the SSE event the client reports to the user."""
+    message = str(err)
+    if len(message) > 500:
+        message = message[:500] + "..."
+    return {"type": "error", "stage": "pipeline", "message": message}

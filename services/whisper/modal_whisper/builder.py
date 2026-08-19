@@ -205,17 +205,24 @@ class TranscriptionPipeline:
 
             polished = []
             total_chunks = 0
-            for i, total, chunk_result in polisher.run_iter(segments):
-                total_chunks = total
-                polished.extend(chunk_result)
-                yield _update(
-                    "polish",
-                    "progress",
-                    detail=f"{i + 1}/{total} chunks",
-                    progress={"current": i + 1, "total": total},
-                )
-            segments = polished
-            yield _update("polish", "done", detail=f"{total_chunks} chunks")
+            try:
+                for i, total, chunk_result in polisher.run_iter(segments):
+                    total_chunks = total
+                    polished.extend(chunk_result)
+                    yield _update(
+                        "polish",
+                        "progress",
+                        detail=f"{i + 1}/{total} chunks",
+                        progress={"current": i + 1, "total": total},
+                    )
+            except Exception as err:
+                # Polishing runs last, on a transcript the GPU has already
+                # finished. Anything the LLM does — refusing, timing out,
+                # running out of credit — costs the wording, never the run.
+                yield _update("polish", "done", detail=_polish_failure(err))
+            else:
+                segments = polished
+                yield _update("polish", "done", detail=f"{total_chunks} chunks")
 
         # Final result
         yield {
@@ -235,6 +242,14 @@ class TranscriptionPipeline:
             if event["type"] == "result":
                 result = event
         return {k: v for k, v in result.items() if k != "type"}
+
+
+def _polish_failure(err: Exception) -> str:
+    """Name a failed polish in the width a progress line has."""
+    message = " ".join(str(err).split())
+    if len(message) > 80:
+        message = message[:80] + "..."
+    return f"failed, keeping unpolished: {message}"
 
 
 def _update(
