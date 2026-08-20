@@ -62,7 +62,6 @@ type TranscribeOpts struct {
 	Diarize            bool    `json:"diarize"`
 	Polish             bool    `json:"polish"`
 	Compact            bool    `json:"compact"`
-	CompactGap         int     `json:"compact_gap"`
 	Language           string  `json:"language,omitempty"`
 	ContextDoc         string  `json:"context_doc,omitempty"`
 	RecordingID        string  `json:"recording_id,omitempty"`
