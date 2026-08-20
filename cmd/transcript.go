@@ -36,9 +36,13 @@ var transcriptCmd = &cobra.Command{
 	Short:   "Write the transcript of a recording, or of many",
 	Long: `Put the text of a recording on disk.
 
---context is required and takes any file describing the recording: an agenda,
-prep notes, a briefing. It is what settles how the names in it are spelt, and
-transcripts of the same people drift apart without it.
+--context is required. It takes a file describing the recording — an agenda,
+prep notes, a briefing — or the description itself, written out. It is what
+settles how the names in it are spelt, and transcripts of the same people
+drift apart without it. A document covering the whole engagement serves every
+recording in it: what the polisher reads out of it is who the people are and
+how their names and systems are spelt, which the subject of one meeting
+barely changes.
 
 A transcript that already exists is reused. --force transcribes the audio
 again, which is what to reach for when the one on record is an old one.
@@ -48,6 +52,7 @@ skipping the ones already written unless --force says otherwise.
 
 Examples:
   plaud transcript abc123 --context ./meeting-prep.md
+  plaud transcript abc123 --context "Vexia and CERC on payments; Éricles Bento, Zeni"
   plaud transcript abc123 --context ./prep.md --identify
   plaud transcript abc123 --context ./prep.md --force
   plaud transcript --since 2026-08-01 --context ./briefing.md --output-dir ./recordings
@@ -63,6 +68,15 @@ Examples:
 			return fmt.Errorf("creating output directory: %w", err)
 		}
 
+		// Before anything is fetched: a context that cannot be read is worth
+		// saying so about while it still costs nothing.
+		contextDoc, err := readContext(trContext)
+		if err != nil {
+			return err
+		}
+		trOpts.ContextDoc = contextDoc
+		trOpts.Language = trLanguage
+
 		recordings, err := chooseRecordings(ctx, args, trFilter, trAll)
 		if err != nil {
 			return err
@@ -71,13 +85,6 @@ Examples:
 			fmt.Fprintln(os.Stderr, "No recordings matched.")
 			return nil
 		}
-
-		trOpts.Language = trLanguage
-		data, err := os.ReadFile(trContext)
-		if err != nil {
-			return fmt.Errorf("reading context file: %w", err)
-		}
-		trOpts.ContextDoc = string(data)
 
 		pending := plan(recordings)
 		if len(pending) == 0 {
@@ -310,6 +317,37 @@ func validateFormat(format string) error {
 	}
 }
 
+// readContext takes either a file describing the recording or the description
+// itself. Knowing something about a recording and having written it down are
+// different things, and demanding the second is what makes a caller invent a
+// document for a meeting they cannot yet describe.
+func readContext(value string) (string, error) {
+	data, err := os.ReadFile(value)
+	if err == nil {
+		return string(data), nil
+	}
+	if !os.IsNotExist(err) {
+		return "", fmt.Errorf("reading context file: %w", err)
+	}
+	// A value shaped like a path was meant as one, and a mistyped path read as
+	// prose is a transcript polished against the name of a file.
+	if looksLikePath(value) {
+		return "", fmt.Errorf("no context file at %q", value)
+	}
+	return value, nil
+}
+
+func looksLikePath(value string) bool {
+	if strings.ContainsAny(value, "/\\") {
+		return true
+	}
+	switch strings.ToLower(filepath.Ext(value)) {
+	case ".md", ".txt", ".markdown", ".rst", ".org":
+		return true
+	}
+	return false
+}
+
 // must fails the build of a command rather than the run of it: a flag that
 // cannot be marked required is a mistake in this file, not in a call.
 func must(err error) {
@@ -326,7 +364,7 @@ func init() {
 	f.StringVar(&trOutputDir, "output-dir", ".", "where the transcripts are written")
 	f.StringVar(&trFormat, "format", "md", "output format: json, txt, srt, md")
 	f.StringVar(&trLanguage, "language", "", "force a language code (e.g. pt, en), empty to detect it")
-	f.StringVar(&trContext, "context", "", "file describing the recording (agenda, notes, briefing); settles how names are spelt")
+	f.StringVar(&trContext, "context", "", "a file describing the recording, or the description itself; settles how names are spelt")
 	f.BoolVar(&trIdentify, "identify", false, "ask who the unrecognised voices are once the transcript is written")
 	must(transcriptCmd.MarkFlagRequired("context"))
 	rootCmd.AddCommand(transcriptCmd)
