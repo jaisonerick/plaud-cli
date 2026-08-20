@@ -259,7 +259,7 @@ func init() {
 	transcribeCmd.Flags().StringVar(&trOutputDir, "output-dir", ".", "output directory")
 	transcribeCmd.Flags().StringVar(&trFormat, "format", "md", "output format: json, txt, srt, md")
 	transcribeCmd.Flags().StringVar(&trOptions, "options", "", "comma-separated disable flags: no-diarize, no-polish, no-compact, no-speaker-recognition")
-	transcribeCmd.Flags().StringVar(&trContext, "context", "", "path to meeting context file (agenda, notes) for better hotwords and polishing")
+	transcribeCmd.Flags().StringVar(&trContext, "context", "", "path to meeting context file (agenda, notes); its names and terms correct the transcript when polishing")
 	transcribeCmd.Flags().IntVar(&trCompactGap, "compact-gap", 2000, "max silence gap in ms before starting a new paragraph")
 	transcribeCmd.Flags().StringVar(&trLanguage, "language", "", "force language code (e.g. pt, en), empty for auto-detect")
 	transcribeCmd.Flags().BoolVar(&trIdentify, "identify", false, "interactively identify unrecognized speakers after transcription")

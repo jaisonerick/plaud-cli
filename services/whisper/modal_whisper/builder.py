@@ -87,29 +87,23 @@ class TranscriptionPipeline:
         yield {"type": "init", "stages": stages}
 
         # 2. Context extraction (lazy — runs inside the stream)
-        hotwords = ""
+        #    What the caller knows about the meeting corrects the transcript
+        #    afterwards and never primes the decoder: Whisper reads a prompt as
+        #    the transcript so far and carries on writing it, on every window
+        #    of the audio, so a term the document names is a term the recording
+        #    gains.
         context_summary = ""
         if opts.context_doc:
             yield _update("context", "started")
             ctx = ContextExtractor(self._llm, opts.context_doc).run()
             context_summary = ctx.context_summary
-            hotwords = ctx.hotwords
-            n_hotwords = len([h for h in hotwords.split(",") if h.strip()])
-            yield _update("context", "done", detail=f"{n_hotwords} hotwords")
+            yield _update(
+                "context", "done", detail=f"{len(context_summary.split())} words"
+            )
 
         # 3. Transcription — per-request session
-        #    Build initial_prompt from context to prime Whisper's decoder with
-        #    domain terms, proper nouns, and language style.
-        initial_prompt = ""
-        if context_summary:
-            initial_prompt = context_summary
-
         yield _update("transcribe", "started")
-        session = TranscribeSession(
-            self._whisper_model,
-            hotwords=hotwords,
-            initial_prompt=initial_prompt,
-        )
+        session = TranscribeSession(self._whisper_model)
         session.load_audio(audio_data)
         result = session.run(opts.language)
         seg_count = len(result.get("segments", []))
