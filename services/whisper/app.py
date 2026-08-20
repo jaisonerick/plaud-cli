@@ -179,6 +179,10 @@ class WhisperTranscriber:
                         yield f"data: {json.dumps(_error_event(err))}\n\n"
                     finally:
                         model_cache.commit()
+                        # The embeddings this run wrote are how `speaker name`
+                        # finds a voice afterwards, and an uncommitted write
+                        # dies with the container that made it.
+                        speaker_volume.commit()
 
                 return StreamingResponse(
                     generate(), media_type="text/event-stream"
@@ -186,6 +190,7 @@ class WhisperTranscriber:
             else:
                 result = pipeline.transcribe(audio_data, opts)
                 await model_cache.commit.aio()
+                await speaker_volume.commit.aio()
                 return JSONResponse(result)
 
         @api.put("/speakers/{audio_id}/{speaker_id}")
