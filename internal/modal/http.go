@@ -57,16 +57,14 @@ func NewHTTPClient(savedEndpoint string, token func(ctx context.Context) (string
 	return &HTTPClient{EndpointURL: endpoint, HTTP: &http.Client{}, Token: token}
 }
 
-// TranscribeOpts holds options for the transcription request.
+// TranscribeOpts is what a caller decides about a transcription. The stages
+// are not among them: the service exists to finish a transcript, and a caller
+// weighing whether to run one of them is being asked to price the tool rather
+// than use it.
 type TranscribeOpts struct {
-	Diarize            bool    `json:"diarize"`
-	Polish             bool    `json:"polish"`
-	Compact            bool    `json:"compact"`
-	Language           string  `json:"language,omitempty"`
-	ContextDoc         string  `json:"context_doc,omitempty"`
-	RecordingID        string  `json:"recording_id,omitempty"`
-	SpeakerRecognition bool    `json:"speaker_recognition"`
-	SpeakerThreshold   float64 `json:"speaker_threshold,omitempty"`
+	RecordingID string `json:"recording_id"`
+	ContextDoc  string `json:"context_doc"`
+	Language    string `json:"language,omitempty"`
 }
 
 // TranscribeResult holds the structured response from a transcription.

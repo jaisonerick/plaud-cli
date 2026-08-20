@@ -157,12 +157,6 @@ class WhisperTranscriber:
                 language=opts_json.get("language", ""),
                 context_doc=opts_json.get("context_doc", ""),
                 recording_id=opts_json.get("recording_id", ""),
-                diarize=opts_json.get("diarize", True),
-                speaker_recognition=opts_json.get("speaker_recognition", False),
-                speaker_threshold=opts_json.get("speaker_threshold", 0.35),
-                polish=opts_json.get("polish", True),
-                compact=opts_json.get("compact", True) and opts_json.get("diarize", True),
-                compact_gap=opts_json.get("compact_gap", 2000),
             )
 
             await speaker_volume.reload.aio()

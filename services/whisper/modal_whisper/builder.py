@@ -17,6 +17,10 @@ from .model import WhisperModel
 from .transcribe import TranscribeSession
 
 
+# How close a voice has to be to a learned one to be called that person.
+_SPEAKER_THRESHOLD = 0.35
+
+
 @dataclass
 class TranscribeOptions:
     """Per-request pipeline options. Immutable value object."""
@@ -24,12 +28,6 @@ class TranscribeOptions:
     language: str = ""
     context_doc: str = ""
     recording_id: str = ""
-    diarize: bool = False
-    speaker_recognition: bool = False
-    speaker_threshold: float = 0.35
-    polish: bool = False
-    compact: bool = False
-    compact_gap: int = 2000
 
 
 class TranscriptionPipeline:
@@ -69,22 +67,12 @@ class TranscriptionPipeline:
             stages.append({"id": "context", "label": "Extracting context"})
         stages.append({"id": "transcribe", "label": "Transcribing audio"})
         stages.append({"id": "align", "label": "Aligning timestamps"})
-        if opts.diarize:
-            stages.append({"id": "diarize", "label": "Diarizing speakers"})
-            stages.append(
-                {"id": "speaker_assign", "label": "Assigning speakers"}
-            )
-        stages.append(
-            {"id": "segment_convert", "label": "Converting segments"}
-        )
-        if opts.speaker_recognition and opts.diarize:
-            stages.append(
-                {"id": "speaker_recognition", "label": "Recognizing speakers"}
-            )
-        if opts.compact and opts.diarize:
-            stages.append({"id": "compact", "label": "Compacting segments"})
-        if opts.polish:
-            stages.append({"id": "polish", "label": "Polishing transcript"})
+        stages.append({"id": "diarize", "label": "Diarizing speakers"})
+        stages.append({"id": "speaker_assign", "label": "Assigning speakers"})
+        stages.append({"id": "segment_convert", "label": "Converting segments"})
+        stages.append({"id": "speaker_recognition", "label": "Recognizing speakers"})
+        stages.append({"id": "compact", "label": "Compacting segments"})
+        stages.append({"id": "polish", "label": "Polishing transcript"})
 
         yield {"type": "init", "stages": stages}
 
@@ -124,31 +112,30 @@ class TranscriptionPipeline:
         # 5. Diarization
         diarized = False
         speaker_embeddings = None
-        if opts.diarize:
-            yield _update("diarize", "started")
-            hf_token = os.environ.get("HF_TOKEN", "")
-            diarizer = Diarizer(session.device, hf_token)
-            diarize_result = diarizer.run(session.audio)
-            if diarize_result is not None:
-                speaker_count = (
-                    len(diarize_result.embeddings)
-                    if diarize_result.embeddings
-                    else 0
-                )
-                yield _update(
-                    "diarize", "done", detail=f"{speaker_count} speakers"
-                )
+        yield _update("diarize", "started")
+        hf_token = os.environ.get("HF_TOKEN", "")
+        diarizer = Diarizer(session.device, hf_token)
+        diarize_result = diarizer.run(session.audio)
+        if diarize_result is not None:
+            speaker_count = (
+                len(diarize_result.embeddings)
+                if diarize_result.embeddings
+                else 0
+            )
+            yield _update(
+                "diarize", "done", detail=f"{speaker_count} speakers"
+            )
 
-                # 6. Speaker assignment
-                yield _update("speaker_assign", "started")
-                result = Diarizer.assign_speakers(diarize_result, result)
-                speaker_embeddings = diarize_result.embeddings
-                diarized = True
-                yield _update("speaker_assign", "done")
-            else:
-                yield _update("diarize", "done", detail="failed")
-                yield _update("speaker_assign", "started")
-                yield _update("speaker_assign", "done")
+            # 6. Speaker assignment
+            yield _update("speaker_assign", "started")
+            result = Diarizer.assign_speakers(diarize_result, result)
+            speaker_embeddings = diarize_result.embeddings
+            diarized = True
+            yield _update("speaker_assign", "done")
+        else:
+            yield _update("diarize", "done", detail="failed")
+            yield _update("speaker_assign", "started")
+            yield _update("speaker_assign", "done")
 
         # Free GPU memory from transcription, alignment, and diarization.
         # Audio and per-request model are no longer needed after this point.
@@ -170,31 +157,28 @@ class TranscriptionPipeline:
             store = SpeakerStore(self._speaker_db_path)
             store.save_audio_embeddings(audio_id, speaker_embeddings)
 
-            if opts.speaker_recognition:
-                yield _update("speaker_recognition", "started")
-                known = store.all_voices()
-                matcher = SpeakerMatcher(known, opts.speaker_threshold)
-                speaker_map = matcher.match(speaker_embeddings)
-                matched = sum(1 for k, v in speaker_map.items() if k != v)
-                yield _update(
-                    "speaker_recognition",
-                    "done",
-                    detail=f"{matched} matched",
-                )
+            yield _update("speaker_recognition", "started")
+            known = store.all_voices()
+            matcher = SpeakerMatcher(known, _SPEAKER_THRESHOLD)
+            speaker_map = matcher.match(speaker_embeddings)
+            matched = sum(1 for k, v in speaker_map.items() if k != v)
+            yield _update(
+                "speaker_recognition",
+                "done",
+                detail=f"{matched} matched",
+            )
 
-                for seg in segments:
-                    if seg["speaker"] in speaker_map:
-                        seg["speaker"] = speaker_map[seg["speaker"]]
-            else:
-                speaker_map = {sid: sid for sid in speaker_embeddings}
+            for seg in segments:
+                if seg["speaker"] in speaker_map:
+                    seg["speaker"] = speaker_map[seg["speaker"]]
 
             store.close()
 
         # 9. Compaction (before polishing so the LLM sees full paragraphs
         #    and can handle repetitions/hallucinations with context)
-        if opts.compact and diarized:
+        if diarized:
             yield _update("compact", "started")
-            segments = Compactor(opts.compact_gap).run(segments)
+            segments = Compactor().run(segments)
             yield _update(
                 "compact", "done", detail=f"{len(segments)} paragraphs"
             )
@@ -207,41 +191,40 @@ class TranscriptionPipeline:
         #     will correct Whisper's output back to that language if Whisper
         #     auto-detected wrong. When empty, polishes in whatever language
         #     Whisper produced.
-        if opts.polish:
-            polisher = Polisher(self._llm, context_summary, language=opts.language)
-            yield _update("polish", "started", detail="0 chunks")
+        polisher = Polisher(self._llm, context_summary, language=opts.language)
+        yield _update("polish", "started", detail="0 chunks")
 
-            polished = []
-            total_chunks = 0
-            no_correction = 0
-            no_answer = 0
-            try:
-                for i, total, result in polisher.run_iter(segments):
-                    total_chunks = total
-                    if result.answered:
-                        no_correction += result.refused
-                    else:
-                        no_answer += result.refused
-                    polished.extend(result.segments)
-                    yield _update(
-                        "polish",
-                        "progress",
-                        detail=f"{i + 1}/{total} chunks",
-                        progress={"current": i + 1, "total": total},
-                    )
-            except Exception as err:
-                # Polishing runs last, on a transcript the GPU has already
-                # finished. Anything the LLM does — refusing, timing out,
-                # running out of credit — costs the wording, never the run.
-                yield _update("polish", "done", detail=_polish_failure(err))
-            else:
-                segments = polished
-                refused, unanswered = no_correction, no_answer
+        polished = []
+        total_chunks = 0
+        no_correction = 0
+        no_answer = 0
+        try:
+            for i, total, result in polisher.run_iter(segments):
+                total_chunks = total
+                if result.answered:
+                    no_correction += result.refused
+                else:
+                    no_answer += result.refused
+                polished.extend(result.segments)
                 yield _update(
                     "polish",
-                    "done",
-                    detail=_polish_done(total_chunks, no_correction, no_answer),
+                    "progress",
+                    detail=f"{i + 1}/{total} chunks",
+                    progress={"current": i + 1, "total": total},
                 )
+        except Exception as err:
+            # Polishing runs last, on a transcript the GPU has already
+            # finished. Anything the LLM does — refusing, timing out,
+            # running out of credit — costs the wording, never the run.
+            yield _update("polish", "done", detail=_polish_failure(err))
+        else:
+            segments = polished
+            refused, unanswered = no_correction, no_answer
+            yield _update(
+                "polish",
+                "done",
+                detail=_polish_done(total_chunks, no_correction, no_answer),
+            )
 
         # No embedding leaves this service. They are voices of people who never
         # agreed to be on anybody's laptop, and the store is shared, so every

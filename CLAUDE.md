@@ -80,7 +80,11 @@ Only accounts on the domains in `services/whisper/modal_whisper/auth.py` are ser
 
 ## Transcription
 
-Plaud issues no new transcripts for this account, so Whisper on Modal is the only thing here that turns audio into text. `transcript` is the one way to get the text of a recording: it fetches what Plaud already holds and sends the rest to Whisper, which `--whisper=false` turns off. `download` only ever copies a file that exists, which leaves it the audio and the summary.
+`transcript` is the one way to get the text of a recording. It reuses a transcript already on record and transcribes the audio when there is none, and `--force` transcribes again over one that is there, which is what an old transcript deserves. `download` only ever copies a file that exists, which leaves it the audio and the summary.
+
+Which engine ran is not a choice a caller makes, and the CLI does not offer one. Neither are the stages: no flag turns off diarization, polishing, recognition or compaction. The tool exists to finish a transcript, and a caller weighing whether to run one of those is being asked to price the tool rather than use it.
+
+`--context` is required, and takes any file describing the recording. It is what settles how the names in it are spelt; without it the polisher guesses, and it guesses differently on each run, so two transcripts of the same people disagree.
 
 Both take one recording by id, or every recording a filter keeps, and both skip what is already on disk unless `--force` says otherwise. The output directory is the record of what has been done, so there is no state file to go stale. `internal/transcript` names the file, and the same name is what makes the skip work.
 
@@ -90,7 +94,7 @@ A recording with no `--language` has its language voted on by samples taken acro
 
 Polishing is an LLM pass over a text that is read afterwards as a quotation, and nothing in a request for spelling and punctuation stops a model returning a summary, half a sentence, or a line of its own training data. `services/whisper/modal_whisper/polish_guard.py` judges every corrected segment against what was transcribed, and a segment it refuses stands as transcribed. A chunk whose answer carries no segments at all is a failed call rather than a verdict on the speech, so it is asked once more before its segments are left alone. The two reach the polish progress line and the CLI as separate counts, because a run whose corrections were thrown away otherwise looks exactly like one that needed none, and a stretch of a meeting nobody polished looks exactly like a correction the guard declined.
 
-`transcript` runs with speaker recognition on, which only matches against voices already learned and so needs nobody present. Teaching a new voice is the part that needs a person: `speaker name` for one, `speaker enroll` for a library's worth.
+Speaker recognition only matches against voices already learned, and so needs nobody present. Teaching a new voice is the part that needs a person: `speaker name` for one, `speaker enroll` for a library's worth.
 
 The GPU container is scaled to zero between jobs, so every run pays a cold start before its first stage reports, and `transcript` says how many recordings it is about to send before the first one starts.
 
