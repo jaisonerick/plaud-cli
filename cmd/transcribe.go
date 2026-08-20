@@ -9,7 +9,6 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/jaisonerick/plaud-cli/internal/api"
 	"github.com/jaisonerick/plaud-cli/internal/identify"
 	"github.com/jaisonerick/plaud-cli/internal/modal"
 	"github.com/jaisonerick/plaud-cli/internal/speaker"
@@ -68,7 +67,7 @@ Examples:
 			return fmt.Errorf("fetching recording details: %w", err)
 		}
 
-		baseName := transcript.SanitizeFilename(detail.Name) + "_" + strings.ReplaceAll(api.FormatEpochMs(detail.StartTime), " ", "_")
+		baseName := transcript.BaseName(detail.Name, detail.StartTime)
 
 		opts, err := parseTranscribeOptions(trOptions)
 		if err != nil {

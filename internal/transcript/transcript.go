@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+	"time"
 )
 
 // Segment represents a single transcript segment from Plaud's JSON format.
@@ -118,6 +119,14 @@ func Ext(format string) string {
 	default:
 		return ".txt"
 	}
+}
+
+// BaseName is the filename stem for a recording: its title, then when it
+// started, with every character a filesystem refuses already taken out of
+// both halves.
+func BaseName(title string, startTime int64) string {
+	started := time.Unix(0, startTime*int64(time.Millisecond)).Format("2006-01-02_15-04")
+	return SanitizeFilename(title) + "_" + started
 }
 
 // SanitizeFilename replaces characters that are invalid in filenames.

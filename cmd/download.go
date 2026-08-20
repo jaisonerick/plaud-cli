@@ -4,9 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"strings"
 
-	"github.com/jaisonerick/plaud-cli/internal/api"
 	"github.com/jaisonerick/plaud-cli/internal/transcript"
 	"github.com/spf13/cobra"
 )
@@ -66,7 +64,7 @@ Examples:
 			return fmt.Errorf("fetching recording details: %w", err)
 		}
 
-		baseName := transcript.SanitizeFilename(detail.Name) + "_" + strings.ReplaceAll(api.FormatEpochMs(detail.StartTime), " ", "_")
+		baseName := transcript.BaseName(detail.Name, detail.StartTime)
 
 		if dlAudio {
 			fmt.Print("Downloading audio... ")

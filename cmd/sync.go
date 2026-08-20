@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"strings"
 	"time"
 
 	"github.com/jaisonerick/plaud-cli/internal/api"
@@ -104,7 +103,7 @@ Examples:
 			}
 
 			// Create recording directory
-			dirName := transcript.SanitizeFilename(r.Name) + "_" + strings.ReplaceAll(api.FormatEpochMs(r.StartTime), " ", "_")
+			dirName := transcript.BaseName(r.Name, r.StartTime)
 			recDir := filepath.Join(syncDir, dirName)
 			if err := os.MkdirAll(recDir, 0755); err != nil {
 				fmt.Fprintf(os.Stderr, "Error creating directory for %s: %v\n", r.Name, err)
