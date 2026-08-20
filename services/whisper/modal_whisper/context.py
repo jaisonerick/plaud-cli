@@ -6,12 +6,11 @@ from .prompts import load_prompt
 
 
 class ContextExtractor:
-    """Parses a context document into hotwords and a structured context summary."""
+    """Parses a context document into a summary the polisher can correct from."""
 
     def __init__(self, llm: LLMClient, context_doc: str):
         self.llm = llm
         self.context_doc = context_doc
-        self.hotwords = ""
         self.context_summary = ""
 
     def run(self) -> "ContextExtractor":
@@ -24,7 +23,5 @@ class ContextExtractor:
         raw = self.llm.call(messages)
         result = json.loads(strip_code_fences(raw))
         self.context_summary = result.get("context_summary", "")
-        self.hotwords = result.get("hotwords", "")
         print(f"  Context: {self.context_summary[:100]}...", file=sys.stderr)
-        print(f"  Hotwords: {self.hotwords[:100]}...", file=sys.stderr)
         return self

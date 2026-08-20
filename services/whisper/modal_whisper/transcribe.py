@@ -23,26 +23,13 @@ def load_audio(audio_data: bytes):
 class TranscribeSession:
     """Per-request: created in transcribe_stream(), garbage collected after.
 
-    Holds the audio array and a (possibly customized) model reference.
-    Runs transcription and alignment for a single request.
+    Holds the audio array and the model reference. Runs transcription and
+    alignment for a single request.
     """
 
-    def __init__(
-        self,
-        whisper_model: WhisperModel,
-        hotwords: str = "",
-        initial_prompt: str = "",
-        condition_on_previous_text: bool = False,
-        beam_size: int = 5,
-    ):
+    def __init__(self, whisper_model: WhisperModel):
         self.device = whisper_model.device
-        self._base_model = whisper_model.model
-        self._model = whisper_model.with_asr_options(
-            hotwords=hotwords,
-            initial_prompt=initial_prompt,
-            condition_on_previous_text=condition_on_previous_text,
-            beam_size=beam_size,
-        )
+        self._model = whisper_model.model
         self.audio = None
 
     def load_audio(self, audio_data: bytes):
@@ -80,10 +67,7 @@ class TranscribeSession:
         return aligned
 
     def cleanup(self):
-        """Release GPU memory held by the per-request model and audio."""
-        # If with_asr_options loaded a separate model, free it
-        if self._model is not None and self._model is not self._base_model:
-            del self._model
+        """Release the audio and the GPU memory the request used."""
         self._model = None
         self.audio = None
         gc.collect()

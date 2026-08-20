@@ -64,7 +64,7 @@ var transcribeDemoCmd = &cobra.Command{
 		// 5. Context extraction
 		tracker.Update(progress.Event{Stage: "context", Status: "started"})
 		time.Sleep(1500 * time.Millisecond)
-		tracker.Update(progress.Event{Stage: "context", Status: "done", Detail: "5 hotwords"})
+		tracker.Update(progress.Event{Stage: "context", Status: "done", Detail: "120 words"})
 
 		// 6. Transcription — show segments being found
 		tracker.Update(progress.Event{Stage: "transcribe", Status: "started"})
