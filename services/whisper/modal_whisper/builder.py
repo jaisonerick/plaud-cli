@@ -192,6 +192,8 @@ class TranscriptionPipeline:
                 "compact", "done", detail=f"{len(segments)} paragraphs"
             )
 
+        unpolished = 0
+
         # 10. Polishing (with per-chunk progress)
         #     Pass the user's forced language directly. When set, the polisher
         #     will correct Whisper's output back to that language if Whisper
@@ -203,9 +205,11 @@ class TranscriptionPipeline:
 
             polished = []
             total_chunks = 0
+            kept = 0
             try:
-                for i, total, chunk_result in polisher.run_iter(segments):
+                for i, total, chunk_result, chunk_kept in polisher.run_iter(segments):
                     total_chunks = total
+                    kept += chunk_kept
                     polished.extend(chunk_result)
                     yield _update(
                         "polish",
@@ -220,7 +224,8 @@ class TranscriptionPipeline:
                 yield _update("polish", "done", detail=_polish_failure(err))
             else:
                 segments = polished
-                yield _update("polish", "done", detail=f"{total_chunks} chunks")
+                unpolished = kept
+                yield _update("polish", "done", detail=_polish_done(total_chunks, kept))
 
         # No embedding leaves this service. They are voices of people who never
         # agreed to be on anybody's laptop, and the store is shared, so every
@@ -230,6 +235,7 @@ class TranscriptionPipeline:
             "audio_id": audio_id,
             "segments": segments,
             "speakers": speaker_map,
+            "unpolished": unpolished,
         }
 
     def transcribe(self, audio_data: bytes, opts: TranscribeOptions) -> dict:
@@ -242,6 +248,13 @@ class TranscriptionPipeline:
             if event["type"] == "result":
                 result = event
         return {k: v for k, v in result.items() if k != "type"}
+
+
+def _polish_done(chunks: int, kept: int) -> str:
+    """Name a finished polish in the width a progress line has."""
+    if not kept:
+        return f"{chunks} chunks"
+    return f"{chunks} chunks, {kept} segments kept as transcribed"
 
 
 def _polish_failure(err: Exception) -> str:

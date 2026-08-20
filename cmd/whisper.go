@@ -138,6 +138,20 @@ func whisperTranscribe(ctx context.Context, w io.Writer, whisper *modal.HTTPClie
 	return result, audioData, nil
 }
 
+// reportUnpolished names the segments the polisher was refused on. The
+// progress line carries the same count, but it is gone by the time anyone
+// reads the transcript it describes.
+func reportUnpolished(w io.Writer, result *modal.TranscribeResult) {
+	if result.Unpolished == 0 {
+		return
+	}
+	noun := "segments"
+	if result.Unpolished == 1 {
+		noun = "segment"
+	}
+	fmt.Fprintf(w, "Polishing rejected on %d %s, which stand as transcribed\n", result.Unpolished, noun)
+}
+
 // saveWhisperTranscript writes a transcript. The voices that spoke it stay on
 // the server, which knows them by the recording they came from.
 func saveWhisperTranscript(result *modal.TranscribeResult, format, dest string) error {

@@ -75,6 +75,9 @@ type TranscribeResult struct {
 	AudioID  string               `json:"audio_id"`
 	Segments []transcript.Segment `json:"segments"`
 	Speakers map[string]string    `json:"speakers"`
+	// Unpolished counts the segments the polisher returned unusable, which
+	// stand as the recogniser wrote them.
+	Unpolished int `json:"unpolished"`
 }
 
 // SSEEvent represents a parsed server-sent event.
@@ -86,9 +89,10 @@ type SSEEvent struct {
 	Detail   *string             `json:"detail,omitempty"`
 	Progress *SSEProgress        `json:"progress,omitempty"`
 	// Result fields (embedded when type == "result")
-	AudioID  string               `json:"audio_id,omitempty"`
-	Segments []transcript.Segment `json:"segments,omitempty"`
-	Speakers map[string]string    `json:"speakers,omitempty"`
+	AudioID    string               `json:"audio_id,omitempty"`
+	Segments   []transcript.Segment `json:"segments,omitempty"`
+	Speakers   map[string]string    `json:"speakers,omitempty"`
+	Unpolished int                  `json:"unpolished,omitempty"`
 	// Error fields
 	Message string `json:"message,omitempty"`
 }
@@ -98,9 +102,10 @@ type SSEEvent struct {
 // field added to the wire and forgotten here goes missing without a sound.
 func (e SSEEvent) Result() *TranscribeResult {
 	return &TranscribeResult{
-		AudioID:  e.AudioID,
-		Segments: e.Segments,
-		Speakers: e.Speakers,
+		AudioID:    e.AudioID,
+		Segments:   e.Segments,
+		Speakers:   e.Speakers,
+		Unpolished: e.Unpolished,
 	}
 }
 

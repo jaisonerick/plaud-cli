@@ -94,6 +94,7 @@ Examples:
 			return err
 		}
 		fmt.Fprintf(os.Stderr, "\nSaved to %s\n", dest)
+		reportUnpolished(os.Stderr, result)
 
 		if len(result.Speakers) == 0 {
 			return nil

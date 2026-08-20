@@ -21,26 +21,11 @@ class LLMClient:
         )
         return response.choices[0].message.content
 
-    def call_batch(self, messages_list: list[list[dict]]) -> list[str]:
-        """Make multiple LLM calls in parallel, preserving order."""
-        results = [None] * len(messages_list)
-
-        with ThreadPoolExecutor(max_workers=self.max_workers) as pool:
-            futures = {
-                pool.submit(self.call, msgs): i
-                for i, msgs in enumerate(messages_list)
-            }
-            for future in as_completed(futures):
-                idx = futures[future]
-                results[idx] = future.result()
-
-        return results
-
     def call_batch_iter(self, messages_list: list[list[dict]]):
-        """Yield responses as they complete, in submission order.
+        """Run the calls in parallel, yielding each in submission order.
 
-        Like call_batch(), but yields results one at a time as sequential
-        chunks become available. Used for per-chunk progress reporting.
+        A chunk is yielded as soon as it and everything before it are done,
+        which is what lets the caller report progress on a batch.
         """
         results = [None] * len(messages_list)
         completed = [False] * len(messages_list)
