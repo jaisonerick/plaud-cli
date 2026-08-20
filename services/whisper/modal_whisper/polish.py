@@ -2,6 +2,7 @@ import re
 import sys
 
 from .llm import LLMClient
+from .polish_guard import preserves_speech
 from .prompts import load_prompt
 
 _CHUNK_TARGET = 15
@@ -43,30 +44,10 @@ class Polisher:
         prompt = prompt.replace("{context_summary}", self.context_summary)
         return prompt
 
-    def run(self, segments: list[dict]) -> list[dict]:
-        chunks = self._chunk(segments)
-        print(f"Polishing transcript: {len(segments)} segments in {len(chunks)} chunks (parallel)", file=sys.stderr)
-
-        prompt = self._build_prompt()
-        messages_list = [
-            [
-                {"role": "system", "content": prompt},
-                {"role": "user", "content": self._format(chunk)},
-            ]
-            for chunk in chunks
-        ]
-
-        responses = self.llm.call_batch(messages_list)
-
-        polished = []
-        for i, (chunk, response) in enumerate(zip(chunks, responses)):
-            polished.extend(self._parse(response.strip(), chunk))
-
-        return polished
-
     def run_iter(self, segments: list[dict]):
-        """Yield (chunk_index, total_chunks, polished_chunk) as each completes in order.
+        """Yield (chunk_index, total_chunks, polished_chunk, kept) as each completes in order.
 
+        `kept` counts the segments of that chunk left as transcribed.
         Used by transcribe_stream() for per-chunk progress events.
         """
         chunks = self._chunk(segments)
@@ -83,7 +64,8 @@ class Polisher:
         ]
 
         for i, response in enumerate(self.llm.call_batch_iter(messages_list)):
-            yield i, total, self._parse(response.strip(), chunks[i])
+            polished, kept = self._parse(response.strip(), chunks[i])
+            yield i, total, polished, kept
 
     @staticmethod
     def _format(chunk: list[dict]) -> str:
@@ -95,19 +77,32 @@ class Polisher:
         return "\n".join(lines)
 
     @staticmethod
-    def _parse(text: str, chunk: list[dict]) -> list[dict]:
-        matches = _SEGMENT_PATTERN.findall(text)
+    def _parse(text: str, chunk: list[dict]) -> tuple[list[dict], int]:
+        """Apply the corrections that are still the speech, count the rest.
 
-        if len(matches) != len(chunk):
-            print(f"Warning: LLM returned {len(matches)} segments, expected {len(chunk)}. Using originals.", file=sys.stderr)
-            return chunk
+        A correction is matched by timestamp and judged on its own, so a
+        segment the model gutted, merged away or never returned costs that
+        segment and no other.
+        """
+        corrections = {
+            int(ts): content.strip() for ts, content in _SEGMENT_PATTERN.findall(text)
+        }
 
-        corrections = {int(ts): content.strip() for ts, content in matches}
+        kept = 0
         for seg in chunk:
-            if seg["start_time"] in corrections:
-                seg["content"] = corrections[seg["start_time"]]
+            polished = corrections.get(seg["start_time"])
+            if polished is not None and preserves_speech(seg["content"], polished):
+                seg["content"] = polished
+            else:
+                kept += 1
 
-        return chunk
+        if kept:
+            print(
+                f"Polish: {kept}/{len(chunk)} segments kept as transcribed",
+                file=sys.stderr,
+            )
+
+        return chunk, kept
 
     @staticmethod
     def _chunk(segments: list[dict]) -> list[list[dict]]:

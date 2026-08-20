@@ -86,6 +86,8 @@ Plaud issues no new transcripts for this account, so Whisper on Modal is the onl
 
 Nothing the caller knows about a recording reaches the decoder. Whisper reads a prompt as the transcript so far and carries on writing it, and the batched pipeline hands that same prompt to every window of the audio, so a term supplied up front becomes a term the recording contains. `--context` is read at the other end, in polishing, where a wrong guess costs a word instead of the speech around it.
 
+Polishing is an LLM pass over a text that is read afterwards as a quotation, and nothing in a request for spelling and punctuation stops a model returning a summary, half a sentence, or a line of its own training data. `services/whisper/modal_whisper/polish_guard.py` judges every corrected segment against what was transcribed, and a segment it refuses stands as transcribed. How many were refused reaches the polish progress line and the CLI after the transcript is saved, because a run whose corrections were thrown away otherwise looks exactly like one that needed none.
+
 `sync` and `download` transcribe with speaker recognition on, which only matches against voices already learned and so needs nobody present. Teaching a new voice is the part that needs a person: `speaker name` for one, `speaker enroll` for a library's worth.
 
 The GPU container is scaled to zero between jobs, so every run pays a cold start before its first stage reports, and `sync` says how many recordings it is about to send before the first one starts.

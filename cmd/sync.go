@@ -181,6 +181,7 @@ Examples:
 						fmt.Fprintf(os.Stderr, "  Error writing transcript for %s: %v\n", r.Name, err)
 						hasError = true
 					}
+					reportUnpolished(os.Stderr, result)
 				}
 			}
 
