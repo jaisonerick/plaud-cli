@@ -7,7 +7,11 @@ from .polish_guard import preserves_speech
 from .prompts import load_prompt
 
 _CHUNK_TARGET = 15
-_SEGMENT_PATTERN = re.compile(r"<segment:(\d+)>\n?(.*?)\n?</segment>", re.DOTALL)
+# The closing tag is accepted with the timestamp repeated in it. Asking for
+# the same tags back is read as an instruction to mirror the whole opening
+# one, and a chunk closed that way carried no segments at all: fifteen
+# openings, no closings, and the speech left as the recogniser wrote it.
+_SEGMENT_PATTERN = re.compile(r"<segment:(\d+)>\n?(.*?)\n?</segment(?::\d+)?>", re.DOTALL)
 
 
 _LANGUAGE_NAMES = {

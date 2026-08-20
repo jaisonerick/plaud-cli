@@ -18,7 +18,7 @@ Your job:
 - Remove obvious speech-to-text hallucination loops — sequences of 3+ identical repeated phrases (e.g. "Contrary. Contrary. Contrary. Contrary.") should be reduced to at most 2 repetitions. Natural speech repetitions like "sim, sim" should be kept as-is.
 - Do NOT replace a word with a different word just because it seems more likely from context. Only fix words that are clearly misspelled or garbled by the speech-to-text system. If a word is a valid word in {language} and could plausibly be what was said, leave it as-is.
 - Do NOT merge or split segments — return the same number of segments
-- Keep the exact same <segment:TIMESTAMP> tags
+- Keep the exact same <segment:TIMESTAMP> opening tags, and close each segment with a bare </segment> carrying no timestamp
 - Preserve the speaker's natural speech patterns — do not make it sound more formal
 
 Meeting context: {context_summary}
