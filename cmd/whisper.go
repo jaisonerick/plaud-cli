@@ -39,22 +39,6 @@ func whisperClient() (*modal.HTTPClient, error) {
 	return modal.NewHTTPClient(cfg.WhisperURL, token), nil
 }
 
-// whisperDefaults are the options for a transcription nobody configured, which
-// is what sync and download run when Plaud holds no transcript of its own.
-// Recognising a voice only compares it against ones already learned, so it
-// needs nobody present. Teaching it a new one is what needs a person, and that
-// is what 'speaker name' and 'speaker enroll' are for.
-func whisperDefaults(language string) modal.TranscribeOpts {
-	return modal.TranscribeOpts{
-		Diarize:            true,
-		Polish:             true,
-		Compact:            true,
-		CompactGap:         2000,
-		Language:           language,
-		SpeakerRecognition: true,
-	}
-}
-
 // whisperTranscribe downloads a recording's audio and transcribes it on Modal,
 // drawing the progress of both onto w. It returns the audio next to the result
 // because speaker identification replays it locally.

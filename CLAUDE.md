@@ -1,6 +1,6 @@
 # plaud-cli
 
-CLI client for Plaud.ai — list, download, search, transcribe, and summarize voice recordings.
+CLI client for Plaud.ai — list, transcribe, download, search and summarize voice recordings.
 
 ## Build & Run
 
@@ -80,9 +80,9 @@ Only accounts on the domains in `services/whisper/modal_whisper/auth.py` are ser
 
 ## Transcription
 
-Plaud issues no new transcripts for this account, so Whisper on Modal is the only thing here that turns audio into text. `transcribe` always goes to Whisper. `sync` and `download` prefer a transcript Plaud already holds and fall back to Whisper for the rest, which `--whisper=false` turns off.
+Plaud issues no new transcripts for this account, so Whisper on Modal is the only thing here that turns audio into text. `transcript` is the one way to get the text of a recording: it fetches what Plaud already holds and sends the rest to Whisper, which `--whisper=false` turns off. `download` only ever copies a file that exists, which leaves it the audio and the summary.
 
-`generate` asks Plaud to transcribe and needs the credits the account no longer has.
+Both take one recording by id, or every recording a filter keeps, and both skip what is already on disk unless `--force` says otherwise. The output directory is the record of what has been done, so there is no state file to go stale. `internal/transcript` names the file, and the same name is what makes the skip work.
 
 Nothing the caller knows about a recording reaches the decoder. Whisper reads a prompt as the transcript so far and carries on writing it, and the batched pipeline hands that same prompt to every window of the audio, so a term supplied up front becomes a term the recording contains. `--context` is read at the other end, in polishing, where a wrong guess costs a word instead of the speech around it. A decode that collapses returns less text for the same speech rather than an error, so the pipeline measures characters per second of speech and the CLI says so when a transcript lands far below it.
 
@@ -90,9 +90,9 @@ A recording with no `--language` has its language voted on by samples taken acro
 
 Polishing is an LLM pass over a text that is read afterwards as a quotation, and nothing in a request for spelling and punctuation stops a model returning a summary, half a sentence, or a line of its own training data. `services/whisper/modal_whisper/polish_guard.py` judges every corrected segment against what was transcribed, and a segment it refuses stands as transcribed. How many were refused reaches the polish progress line and the CLI after the transcript is saved, because a run whose corrections were thrown away otherwise looks exactly like one that needed none.
 
-`sync` and `download` transcribe with speaker recognition on, which only matches against voices already learned and so needs nobody present. Teaching a new voice is the part that needs a person: `speaker name` for one, `speaker enroll` for a library's worth.
+`transcript` runs with speaker recognition on, which only matches against voices already learned and so needs nobody present. Teaching a new voice is the part that needs a person: `speaker name` for one, `speaker enroll` for a library's worth.
 
-The GPU container is scaled to zero between jobs, so every run pays a cold start before its first stage reports, and `sync` says how many recordings it is about to send before the first one starts.
+The GPU container is scaled to zero between jobs, so every run pays a cold start before its first stage reports, and `transcript` says how many recordings it is about to send before the first one starts.
 
 ## Speaker Recognition
 
@@ -121,7 +121,6 @@ The voices live in a SQLite file on a Modal volume, and a container serves whate
 All stored in `~/.config/plaud/` with 0600 permissions:
 - `token.json` — Plaud auth token and device ID
 - `auth.json` — the Google sign-in for the transcription service (0600; a refresh token is worth the account)
-- `sync-state.json` — Incremental sync tracking
 - `update-state.json` — Version check cache
 - `cache/transcripts/` — Local transcript cache
 
