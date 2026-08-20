@@ -59,7 +59,7 @@ func TestNoVoiceEverReachesTheCaller(t *testing.T) {
 func TestTranscribeOptionsNameTheRecording(t *testing.T) {
 	// The service keys a transcription's voices by this, and naming a speaker
 	// afterwards is only possible because it does.
-	encoded, err := json.Marshal(TranscribeOpts{RecordingID: "abc123", Diarize: true})
+	encoded, err := json.Marshal(TranscribeOpts{RecordingID: "abc123", ContextDoc: "an agenda"})
 	if err != nil {
 		t.Fatal(err)
 	}

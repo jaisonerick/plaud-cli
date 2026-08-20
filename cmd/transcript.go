@@ -27,34 +27,31 @@ var (
 	trContext   string
 	trLanguage  string
 	trIdentify  bool
-	trWhisper   bool
-	trOpts      = modal.TranscribeOpts{
-		Diarize:            true,
-		Polish:             true,
-		Compact:            true,
-		SpeakerRecognition: true,
-	}
+	trOpts      modal.TranscribeOpts
 )
 
 var transcriptCmd = &cobra.Command{
 	Use:     "transcript [id]",
 	Aliases: []string{"transcribe"},
 	Short:   "Write the transcript of a recording, or of many",
-	Long: `Put the text of a recording on disk, transcribing it when nobody has yet.
+	Long: `Put the text of a recording on disk.
 
-A transcript Plaud already holds is fetched. Anything else goes to Whisper,
-which --whisper=false turns off if the GPU is not wanted.
+--context is required and takes any file describing the recording: an agenda,
+prep notes, a briefing. It is what settles how the names in it are spelt, and
+transcripts of the same people drift apart without it.
+
+A transcript that already exists is reused. --force transcribes the audio
+again, which is what to reach for when the one on record is an old one.
 
 Naming a recording does one. A filter, or --all, does every recording it keeps,
 skipping the ones already written unless --force says otherwise.
 
 Examples:
-  plaud transcript abc123
-  plaud transcript abc123 --context ./meeting-prep.md --identify
-  plaud transcript abc123 --polish=false --compact=false
-  plaud transcript --since 2026-08-01 --output-dir ./recordings
-  plaud transcript --tag cliente --format srt
-  plaud transcript --all --whisper=false`,
+  plaud transcript abc123 --context ./meeting-prep.md
+  plaud transcript abc123 --context ./prep.md --identify
+  plaud transcript abc123 --context ./prep.md --force
+  plaud transcript --since 2026-08-01 --context ./briefing.md --output-dir ./recordings
+  plaud transcript --tag cliente --context ./briefing.md --format srt`,
 	Args: cobra.MaximumNArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		ctx := cmd.Context()
@@ -76,19 +73,11 @@ Examples:
 		}
 
 		trOpts.Language = trLanguage
-		if trContext != "" {
-			data, err := os.ReadFile(trContext)
-			if err != nil {
-				return fmt.Errorf("reading context file: %w", err)
-			}
-			trOpts.ContextDoc = string(data)
+		data, err := os.ReadFile(trContext)
+		if err != nil {
+			return fmt.Errorf("reading context file: %w", err)
 		}
-		// Both compaction and speaker recognition read the speaker of a
-		// segment, which only diarization fills in.
-		if !trOpts.Diarize {
-			trOpts.Compact = false
-			trOpts.SpeakerRecognition = false
-		}
+		trOpts.ContextDoc = string(data)
 
 		pending := plan(recordings)
 		if len(pending) == 0 {
@@ -96,17 +85,11 @@ Examples:
 			return nil
 		}
 
-		// Resolve Modal once: a missing credential should fail before the
-		// first recording, not once per recording. Each Whisper run wakes a
-		// GPU container and bills for it, so say how many are coming.
-		var whisper *modal.HTTPClient
-		if needsWhisper(pending) {
-			if whisper, err = whisperClient(); err != nil {
-				return err
-			}
-			if n := countWhisper(pending); n > 1 {
-				fmt.Fprintf(os.Stderr, "%d recording(s) have no Plaud transcript and will be transcribed on Modal.\n", n)
-			}
+		// Resolve the service once: a missing credential should fail before
+		// the first recording rather than once per recording.
+		whisper, err := whisperClient()
+		if err != nil {
+			return err
 		}
 
 		var failed int
@@ -152,24 +135,9 @@ func plan(recordings []api.RecordingSimple) []job {
 	return pending
 }
 
-func needsWhisper(pending []job) bool { return countWhisper(pending) > 0 }
-
-func countWhisper(pending []job) int {
-	if !trWhisper {
-		return 0
-	}
-	n := 0
-	for _, j := range pending {
-		if !j.recording.HasTranscript {
-			n++
-		}
-	}
-	return n
-}
-
 func (j job) run(ctx context.Context, whisper *modal.HTTPClient) error {
-	if j.recording.HasTranscript {
-		written, err := j.fromPlaud(ctx)
+	if !trForce && j.recording.HasTranscript {
+		written, err := j.fromRecord(ctx)
 		if err != nil {
 			return err
 		}
@@ -178,16 +146,12 @@ func (j job) run(ctx context.Context, whisper *modal.HTTPClient) error {
 			return nil
 		}
 	}
-
-	if !trWhisper {
-		return fmt.Errorf("Plaud holds no transcript and --whisper=false forbids making one")
-	}
-	return j.fromWhisper(ctx, whisper)
+	return j.fromAudio(ctx, whisper)
 }
 
-// fromPlaud writes the transcript Plaud already holds. It reports whether it
+// fromRecord writes the transcript already on record. It reports whether it
 // found one: an account can claim a transcript and serve no link to it.
-func (j job) fromPlaud(ctx context.Context) (bool, error) {
+func (j job) fromRecord(ctx context.Context) (bool, error) {
 	detail, err := client.GetDetail(ctx, j.recording.ID)
 	if err != nil {
 		return false, fmt.Errorf("fetching recording details: %w", err)
@@ -208,7 +172,7 @@ func (j job) fromPlaud(ctx context.Context) (bool, error) {
 	return true, saveTranscript(segments, trFormat, j.dest)
 }
 
-func (j job) fromWhisper(ctx context.Context, whisper *modal.HTTPClient) error {
+func (j job) fromAudio(ctx context.Context, whisper *modal.HTTPClient) error {
 	result, audioData, err := whisperTranscribe(ctx, os.Stderr, whisper, j.recording.ID, trOpts)
 	if err != nil {
 		return err
@@ -346,20 +310,24 @@ func validateFormat(format string) error {
 	}
 }
 
+// must fails the build of a command rather than the run of it: a flag that
+// cannot be marked required is a mistake in this file, not in a call.
+func must(err error) {
+	if err != nil {
+		panic(err)
+	}
+}
+
 func init() {
 	f := transcriptCmd.Flags()
 	addFilterFlags(transcriptCmd, &trFilter)
 	f.BoolVar(&trAll, "all", false, "every recording in the account")
-	f.BoolVar(&trForce, "force", false, "write again over a transcript already on disk")
+	f.BoolVar(&trForce, "force", false, "transcribe the audio again instead of reusing a transcript that exists")
 	f.StringVar(&trOutputDir, "output-dir", ".", "where the transcripts are written")
 	f.StringVar(&trFormat, "format", "md", "output format: json, txt, srt, md")
 	f.StringVar(&trLanguage, "language", "", "force a language code (e.g. pt, en), empty to detect it")
-	f.StringVar(&trContext, "context", "", "meeting context file (agenda, notes); its names and terms correct the transcript when polishing")
-	f.BoolVar(&trWhisper, "whisper", true, "transcribe on Modal when Plaud holds no transcript")
+	f.StringVar(&trContext, "context", "", "file describing the recording (agenda, notes, briefing); settles how names are spelt")
 	f.BoolVar(&trIdentify, "identify", false, "ask who the unrecognised voices are once the transcript is written")
-	f.BoolVar(&trOpts.Diarize, "diarize", true, "separate the voices")
-	f.BoolVar(&trOpts.Polish, "polish", true, "correct spelling and punctuation afterwards")
-	f.BoolVar(&trOpts.Compact, "compact", true, "join a speaker's consecutive segments into paragraphs")
-	f.BoolVar(&trOpts.SpeakerRecognition, "speaker-recognition", true, "name the voices already learned")
+	must(transcriptCmd.MarkFlagRequired("context"))
 	rootCmd.AddCommand(transcriptCmd)
 }

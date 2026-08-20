@@ -30,8 +30,8 @@ func addFilterFlags(cmd *cobra.Command, f *recordingFilter) {
 	cmd.Flags().StringVar(&f.before, "before", "", "only recordings up to this date (YYYY-MM-DD)")
 	cmd.Flags().StringVar(&f.search, "search", "", "only recordings whose name contains this")
 	cmd.Flags().IntVar(&f.limit, "limit", 0, "stop after this many recordings")
-	cmd.Flags().BoolVar(&f.hasTranscript, "has-transcript", false, "only recordings Plaud already transcribed")
-	cmd.Flags().BoolVar(&f.hasSummary, "has-summary", false, "only recordings Plaud already summarized")
+	cmd.Flags().BoolVar(&f.hasTranscript, "has-transcript", false, "only recordings that already have a transcript on record")
+	cmd.Flags().BoolVar(&f.hasSummary, "has-summary", false, "only recordings that already have a summary on record")
 }
 
 // selects reports whether the caller narrowed anything at all. A command that
