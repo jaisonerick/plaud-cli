@@ -98,3 +98,27 @@ def test_a_second_ask_that_raises_leaves_the_chunk_as_transcribed():
     assert llm.asks == 1
     assert not result.answered
     assert [s["content"] for s in result.segments] == list(SPOKEN.values())
+
+
+def test_a_closing_tag_that_repeats_the_timestamp_is_still_a_segment():
+    # What the model actually returns often enough to cost a whole chunk.
+    result, llm = polish(
+        "<segment:1000>\nEntão a gente fecha o escopo dessa fase toda na sexta-feira que vem, tudo bem?\n</segment:1000>\n"
+        "<segment:2000>\nEu mando o documento revisado antes disso pra vocês olharem com calma.\n</segment:2000>\n"
+        "<segment:3000>\nPerfeito, aí a gente decide na reunião seguinte se entra ou não entra no piloto.\n</segment:3000>"
+    )
+
+    assert llm.asks == 0, "nothing here needs asking again"
+    assert result.answered
+    assert result.refused == 0
+    assert result.segments[0]["content"].startswith("Então a gente fecha o escopo")
+
+
+def test_the_two_ways_of_closing_can_be_mixed():
+    result, _ = polish(
+        "<segment:1000>\nEntão a gente fecha o escopo dessa fase toda na sexta-feira que vem, tudo bem?\n</segment>\n"
+        "<segment:2000>\nEu mando o documento revisado antes disso pra vocês olharem com calma.\n</segment:2000>\n"
+        "<segment:3000>\nPerfeito, aí a gente decide na reunião seguinte se entra ou não entra no piloto.\n</segment>"
+    )
+
+    assert result.refused == 0
