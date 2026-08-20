@@ -199,7 +199,8 @@ class TranscriptionPipeline:
                 "compact", "done", detail=f"{len(segments)} paragraphs"
             )
 
-        unpolished = 0
+        refused = 0
+        unanswered = 0
 
         # 10. Polishing (with per-chunk progress)
         #     Pass the user's forced language directly. When set, the polisher
@@ -212,12 +213,16 @@ class TranscriptionPipeline:
 
             polished = []
             total_chunks = 0
-            kept = 0
+            no_correction = 0
+            no_answer = 0
             try:
-                for i, total, chunk_result, chunk_kept in polisher.run_iter(segments):
+                for i, total, result in polisher.run_iter(segments):
                     total_chunks = total
-                    kept += chunk_kept
-                    polished.extend(chunk_result)
+                    if result.answered:
+                        no_correction += result.refused
+                    else:
+                        no_answer += result.refused
+                    polished.extend(result.segments)
                     yield _update(
                         "polish",
                         "progress",
@@ -231,8 +236,12 @@ class TranscriptionPipeline:
                 yield _update("polish", "done", detail=_polish_failure(err))
             else:
                 segments = polished
-                unpolished = kept
-                yield _update("polish", "done", detail=_polish_done(total_chunks, kept))
+                refused, unanswered = no_correction, no_answer
+                yield _update(
+                    "polish",
+                    "done",
+                    detail=_polish_done(total_chunks, no_correction, no_answer),
+                )
 
         # No embedding leaves this service. They are voices of people who never
         # agreed to be on anybody's laptop, and the store is shared, so every
@@ -242,7 +251,8 @@ class TranscriptionPipeline:
             "audio_id": audio_id,
             "segments": segments,
             "speakers": speaker_map,
-            "unpolished": unpolished,
+            "refused": refused,
+            "unanswered": unanswered,
             "language": {
                 "code": language,
                 "detected": detected is not None,
@@ -285,11 +295,16 @@ def _segments_done(count: int, transcript_density: Density | None) -> str:
     return f"{count} segments, {rate}"
 
 
-def _polish_done(chunks: int, kept: int) -> str:
+def _polish_done(chunks: int, refused: int, unanswered: int) -> str:
     """Name a finished polish in the width a progress line has."""
-    if not kept:
+    left = []
+    if refused:
+        left.append(f"{refused} refused")
+    if unanswered:
+        left.append(f"{unanswered} unanswered")
+    if not left:
         return f"{chunks} chunks"
-    return f"{chunks} chunks, {kept} segments kept as transcribed"
+    return f"{chunks} chunks, " + ", ".join(left)
 
 
 def _polish_failure(err: Exception) -> str:

@@ -1,5 +1,6 @@
 import re
 import sys
+from dataclasses import dataclass
 
 from .llm import LLMClient
 from .polish_guard import preserves_speech
@@ -17,6 +18,21 @@ _LANGUAGE_NAMES = {
     "de": "German",
     "it": "Italian",
 }
+
+
+@dataclass(frozen=True)
+class Polished:
+    """What one chunk came back as.
+
+    `refused` counts the segments left as transcribed. `answered` separates the
+    two reasons that happens: a correction the guard would not take, and an
+    answer that carried no segments at all, which is a failed call rather than
+    a verdict on the speech.
+    """
+
+    segments: list[dict]
+    refused: int
+    answered: bool
 
 
 class Polisher:
@@ -45,9 +61,8 @@ class Polisher:
         return prompt
 
     def run_iter(self, segments: list[dict]):
-        """Yield (chunk_index, total_chunks, polished_chunk, kept) as each completes in order.
+        """Yield (chunk_index, total_chunks, Polished) as each completes in order.
 
-        `kept` counts the segments of that chunk left as transcribed.
         Used by transcribe_stream() for per-chunk progress events.
         """
         chunks = self._chunk(segments)
@@ -64,8 +79,33 @@ class Polisher:
         ]
 
         for i, response in enumerate(self.llm.call_batch_iter(messages_list)):
-            polished, kept = self._parse(response.strip(), chunks[i])
-            yield i, total, polished, kept
+            result = self._parse((response or "").strip(), chunks[i])
+            if not result.answered:
+                result = self._ask_again(prompt, chunks[i])
+            yield i, total, result
+
+    def _ask_again(self, prompt: str, chunk: list[dict]) -> "Polished":
+        """One more try for a chunk whose answer carried no segments.
+
+        Out of a batch of parallel calls one comes back as prose, or as
+        nothing, often enough to matter, and letting that stand costs a whole
+        stretch of the meeting rather than a wording.
+        """
+        print(
+            f"Polish: asking again for {len(chunk)} segments whose answer carried none",
+            file=sys.stderr,
+        )
+        try:
+            response = self.llm.call(
+                [
+                    {"role": "system", "content": prompt},
+                    {"role": "user", "content": self._format(chunk)},
+                ]
+            )
+        except Exception as err:
+            print(f"Polish: the second try failed too: {err}", file=sys.stderr)
+            return Polished(segments=chunk, refused=len(chunk), answered=False)
+        return self._parse((response or "").strip(), chunk)
 
     @staticmethod
     def _format(chunk: list[dict]) -> str:
@@ -77,32 +117,44 @@ class Polisher:
         return "\n".join(lines)
 
     @staticmethod
-    def _parse(text: str, chunk: list[dict]) -> tuple[list[dict], int]:
+    def _parse(text: str, chunk: list[dict]) -> "Polished":
         """Apply the corrections that are still the speech, count the rest.
 
         A correction is matched by timestamp and judged on its own, so a
         segment the model gutted, merged away or never returned costs that
         segment and no other.
         """
-        corrections = {
-            int(ts): content.strip() for ts, content in _SEGMENT_PATTERN.findall(text)
-        }
+        matches = _SEGMENT_PATTERN.findall(text)
+        if not matches:
+            # The counts are the diagnosis: an answer opening segments it never
+            # closes is a different fault from one that answered in prose, and
+            # the failure is intermittent enough that the next occurrence is
+            # the only chance to tell them apart.
+            print(
+                f"Polish: the answer carried no segments "
+                f"({len(text)} chars, {text.count('<segment:')} opened, "
+                f"{text.count('</segment>')} closed): {text[:400]!r}",
+                file=sys.stderr,
+            )
+            return Polished(segments=chunk, refused=len(chunk), answered=False)
 
-        kept = 0
+        corrections = {int(ts): content.strip() for ts, content in matches}
+
+        refused = 0
         for seg in chunk:
             polished = corrections.get(seg["start_time"])
             if polished is not None and preserves_speech(seg["content"], polished):
                 seg["content"] = polished
             else:
-                kept += 1
+                refused += 1
 
-        if kept:
+        if refused:
             print(
-                f"Polish: {kept}/{len(chunk)} segments kept as transcribed",
+                f"Polish: {refused}/{len(chunk)} segments kept as transcribed",
                 file=sys.stderr,
             )
 
-        return chunk, kept
+        return Polished(segments=chunk, refused=refused, answered=True)
 
     @staticmethod
     def _chunk(segments: list[dict]) -> list[list[dict]]:

@@ -7,15 +7,27 @@ SPOKEN = {
     3000: "perfeito, ai a gente decide na reuniao seguinte se entra ou nao entra no piloto",
 }
 
+GOOD = (
+    "<segment:1000>\nEntão a gente fecha o escopo dessa fase toda na sexta-feira que vem, tudo bem?\n</segment>\n"
+    "<segment:2000>\nEu mando o documento revisado antes disso pra vocês olharem com calma.\n</segment>\n"
+    "<segment:3000>\nPerfeito, aí a gente decide na reunião seguinte se entra ou não entra no piloto.\n</segment>"
+)
+
 
 class FakeLLM(LLMClient):
-    """Answers with a canned response per chunk, calling nothing."""
+    """Answers with canned responses, calling nothing. Records every ask."""
 
-    def __init__(self, responses: list[str]):
-        self.responses = responses
+    def __init__(self, batch: list[str], retries: list[str] | None = None):
+        self.batch = batch
+        self.retries = list(retries or [])
+        self.asks = 0
 
     def call_batch_iter(self, messages_list):
-        yield from self.responses
+        yield from self.batch
+
+    def call(self, messages):
+        self.asks += 1
+        return self.retries.pop(0) if self.retries else ""
 
 
 def segments() -> list[dict]:
@@ -25,38 +37,64 @@ def segments() -> list[dict]:
     ]
 
 
-def polish(response: str) -> tuple[list[dict], int]:
-    polisher = Polisher(FakeLLM([response]), context_summary="", language="pt")
-    _, _, polished, kept = next(polisher.run_iter(segments()))
-    return polished, kept
+def polish(response: str, retries: list[str] | None = None):
+    llm = FakeLLM([response], retries)
+    polisher = Polisher(llm, context_summary="", language="pt")
+    _, _, result = next(polisher.run_iter(segments()))
+    return result, llm
 
 
 def test_a_gutted_segment_costs_only_itself():
-    polished, kept = polish(
+    result, _ = polish(
         "<segment:1000>\nEntão a gente fecha\n</segment>\n"
         "<segment:2000>\nEu mando o documento revisado antes disso pra vocês olharem com calma.\n</segment>\n"
         "<segment:3000>\nPerfeito, aí a gente decide na reunião seguinte se entra ou não entra no piloto.\n</segment>"
     )
 
-    assert kept == 1
-    assert polished[0]["content"] == SPOKEN[1000]
-    assert polished[1]["content"].startswith("Eu mando o documento revisado")
-    assert polished[2]["content"].startswith("Perfeito, aí a gente decide")
+    assert result.answered
+    assert result.refused == 1
+    assert result.segments[0]["content"] == SPOKEN[1000]
+    assert result.segments[1]["content"].startswith("Eu mando o documento revisado")
 
 
 def test_a_segment_the_model_never_returned_stands_as_transcribed():
-    polished, kept = polish(
+    result, _ = polish(
         "<segment:1000>\nEntão a gente fecha o escopo dessa fase toda na sexta-feira que vem, tudo bem?\n</segment>\n"
         "<segment:3000>\nPerfeito, aí a gente decide na reunião seguinte se entra ou não entra no piloto.\n</segment>"
     )
 
-    assert kept == 1
-    assert polished[1]["content"] == SPOKEN[2000]
-    assert polished[0]["content"].startswith("Então a gente fecha o escopo")
+    assert result.refused == 1
+    assert result.segments[1]["content"] == SPOKEN[2000]
 
 
-def test_an_answer_in_no_recognisable_shape_leaves_the_whole_chunk_as_transcribed():
-    polished, kept = polish("I'm sorry, I can't help with that.")
+def test_an_answer_carrying_no_segments_is_asked_again():
+    result, llm = polish("I'm sorry, I can't help with that.", retries=[GOOD])
 
-    assert kept == 3
-    assert [seg["content"] for seg in polished] == list(SPOKEN.values())
+    assert llm.asks == 1, "the chunk must be asked a second time"
+    assert result.answered
+    assert result.refused == 0
+    assert result.segments[0]["content"].startswith("Então a gente fecha o escopo")
+
+
+def test_asking_again_is_not_endless():
+    result, llm = polish("nothing usable", retries=["still nothing usable"])
+
+    assert llm.asks == 1
+    assert not result.answered
+    assert result.refused == 3
+    assert [s["content"] for s in result.segments] == list(SPOKEN.values())
+
+
+def test_a_second_ask_that_raises_leaves_the_chunk_as_transcribed():
+    class Angry(FakeLLM):
+        def call(self, messages):
+            self.asks += 1
+            raise RuntimeError("upstream said no")
+
+    llm = Angry(["nothing usable"])
+    polisher = Polisher(llm, context_summary="", language="pt")
+    _, _, result = next(polisher.run_iter(segments()))
+
+    assert llm.asks == 1
+    assert not result.answered
+    assert [s["content"] for s in result.segments] == list(SPOKEN.values())

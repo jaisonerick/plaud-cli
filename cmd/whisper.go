@@ -149,18 +149,24 @@ func reportSparse(w io.Writer, result *modal.TranscribeResult) {
 	fmt.Fprintf(w, "Warning: this transcript carries %.1f characters per second of speech, far below what continuous speech produces. Check it before using it.\n", result.CharsPerSecond)
 }
 
-// reportUnpolished names the segments the polisher was refused on. The
-// progress line carries the same count, but it is gone by the time anyone
-// reads the transcript it describes.
+// reportUnpolished names the segments left as the recogniser wrote them, and
+// which of the two reasons applies. A correction the guard would not take is
+// the guard doing its job; a chunk that answered nothing twice is a fault, and
+// reading them as the same number is what hid the second one.
 func reportUnpolished(w io.Writer, result *modal.TranscribeResult) {
-	if result.Unpolished == 0 {
-		return
+	if result.Refused > 0 {
+		fmt.Fprintf(w, "Polishing refused %s, which stand as transcribed\n", segmentCount(result.Refused))
 	}
-	noun := "segments"
-	if result.Unpolished == 1 {
-		noun = "segment"
+	if result.Unanswered > 0 {
+		fmt.Fprintf(w, "Polishing never came back for %s, even on a second ask. They stand as transcribed, and the wording they would have had is missing.\n", segmentCount(result.Unanswered))
 	}
-	fmt.Fprintf(w, "Polishing rejected on %d %s, which stand as transcribed\n", result.Unpolished, noun)
+}
+
+func segmentCount(n int) string {
+	if n == 1 {
+		return "1 segment"
+	}
+	return fmt.Sprintf("%d segments", n)
 }
 
 // saveWhisperTranscript writes a transcript. The voices that spoke it stay on

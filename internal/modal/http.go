@@ -74,9 +74,11 @@ type TranscribeResult struct {
 	AudioID  string               `json:"audio_id"`
 	Segments []transcript.Segment `json:"segments"`
 	Speakers map[string]string    `json:"speakers"`
-	// Unpolished counts the segments the polisher returned unusable, which
-	// stand as the recogniser wrote them.
-	Unpolished int `json:"unpolished"`
+	// Refused counts the corrections the guard would not take, and Unanswered
+	// the segments whose chunk came back carrying none even on a second ask.
+	// Both stand as the recogniser wrote them, for different reasons.
+	Refused    int `json:"refused"`
+	Unanswered int `json:"unanswered"`
 	// Language is what the transcript was written in, and whether a caller
 	// chose that or the audio was asked.
 	Language Language `json:"language"`
@@ -108,7 +110,8 @@ type SSEEvent struct {
 	AudioID        string               `json:"audio_id,omitempty"`
 	Segments       []transcript.Segment `json:"segments,omitempty"`
 	Speakers       map[string]string    `json:"speakers,omitempty"`
-	Unpolished     int                  `json:"unpolished,omitempty"`
+	Refused        int                  `json:"refused,omitempty"`
+	Unanswered     int                  `json:"unanswered,omitempty"`
 	Language       Language             `json:"language,omitempty"`
 	CharsPerSecond float64              `json:"chars_per_second,omitempty"`
 	Sparse         bool                 `json:"sparse,omitempty"`
@@ -124,7 +127,8 @@ func (e SSEEvent) Result() *TranscribeResult {
 		AudioID:        e.AudioID,
 		Segments:       e.Segments,
 		Speakers:       e.Speakers,
-		Unpolished:     e.Unpolished,
+		Refused:        e.Refused,
+		Unanswered:     e.Unanswered,
 		Language:       e.Language,
 		CharsPerSecond: e.CharsPerSecond,
 		Sparse:         e.Sparse,
