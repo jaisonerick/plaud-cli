@@ -94,6 +94,7 @@ Examples:
 			return err
 		}
 		fmt.Fprintf(os.Stderr, "\nSaved to %s\n", dest)
+		reportLanguage(os.Stderr, result)
 		reportUnpolished(os.Stderr, result)
 		reportSparse(os.Stderr, result)
 

@@ -78,10 +78,23 @@ type TranscribeResult struct {
 	// Unpolished counts the segments the polisher returned unusable, which
 	// stand as the recogniser wrote them.
 	Unpolished int `json:"unpolished"`
+	// Language is what the transcript was written in, and whether a caller
+	// chose that or the audio was asked.
+	Language Language `json:"language"`
 	// CharsPerSecond is how much text the transcript carries per second of
 	// speech, and Sparse says the service found that far below speech.
 	CharsPerSecond float64 `json:"chars_per_second"`
 	Sparse         bool    `json:"sparse"`
+}
+
+// Language is the language a transcript came out in. Detected says the audio
+// decided rather than the caller, and Agreement is the share of the samples
+// taken across the recording that heard Code.
+type Language struct {
+	Code      string  `json:"code"`
+	Detected  bool    `json:"detected"`
+	Agreement float64 `json:"agreement"`
+	Samples   int     `json:"samples"`
 }
 
 // SSEEvent represents a parsed server-sent event.
@@ -97,6 +110,7 @@ type SSEEvent struct {
 	Segments       []transcript.Segment `json:"segments,omitempty"`
 	Speakers       map[string]string    `json:"speakers,omitempty"`
 	Unpolished     int                  `json:"unpolished,omitempty"`
+	Language       Language             `json:"language,omitempty"`
 	CharsPerSecond float64              `json:"chars_per_second,omitempty"`
 	Sparse         bool                 `json:"sparse,omitempty"`
 	// Error fields
@@ -112,6 +126,7 @@ func (e SSEEvent) Result() *TranscribeResult {
 		Segments:       e.Segments,
 		Speakers:       e.Speakers,
 		Unpolished:     e.Unpolished,
+		Language:       e.Language,
 		CharsPerSecond: e.CharsPerSecond,
 		Sparse:         e.Sparse,
 	}
