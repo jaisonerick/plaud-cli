@@ -112,7 +112,7 @@ Enrollment embeds with the model the diarization pipeline itself uses (`services
 
 `fold` exists twice, in `internal/speaker/names.go` and `services/whisper/modal_whisper/speaker_store.py`, and the two must agree: one decides what name to offer, the other what is stored, and a disagreement is a person who cannot be found under the name they were saved with. Both are tested against the same cases.
 
-The voices live in a SQLite file on a Modal volume, and a container serves whatever view of that volume it last loaded. Writing without reloading first publishes the database as it looked before someone else's write, undoing it while reporting success. Every path that touches a voice goes through `open_speaker_store()` for that reason.
+The voices live in a SQLite file on a Modal volume, and a container serves whatever view of that volume it last loaded. Writing without reloading first publishes the database as it looked before someone else's write, undoing it while reporting success. Every path that touches a voice goes through `open_speaker_store()` for that reason. A write that is never committed does not get that far at all: it stays in the container that made it, so the voices a transcription separated are gone by the time anyone tries to name them, and reading them back within the same run still works, which is what makes the omission easy to miss.
 
 ## Config Files
 
