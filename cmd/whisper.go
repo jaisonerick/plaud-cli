@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"math"
 
 	"github.com/jaisonerick/plaud-cli/internal/auth"
 	"github.com/jaisonerick/plaud-cli/internal/modal"
@@ -136,6 +137,22 @@ func whisperTranscribe(ctx context.Context, w io.Writer, whisper *modal.HTTPClie
 	tracker.Abort()
 	tracker.Wait()
 	return result, audioData, nil
+}
+
+// reportLanguage names the language when the audio chose it. Whisper
+// translates rather than mis-spells when it chooses wrong, so the transcript
+// itself is fluent and says nothing about the decision.
+func reportLanguage(w io.Writer, result *modal.TranscribeResult) {
+	lang := result.Language
+	if !lang.Detected {
+		return
+	}
+	agreed := int(math.Round(lang.Agreement * float64(lang.Samples)))
+	if lang.Agreement < 0.6 {
+		fmt.Fprintf(w, "Warning: language was detected as %s, but only %d of %d samples of the audio agreed. Pass --language to settle it.\n", lang.Code, agreed, lang.Samples)
+		return
+	}
+	fmt.Fprintf(w, "Language detected as %s (%d of %d samples)\n", lang.Code, agreed, lang.Samples)
 }
 
 // reportSparse says when a transcript came back holding far less speech than

@@ -4,8 +4,12 @@ import tempfile
 
 import torch
 import whisperx
+from whisperx.audio import N_SAMPLES
 
+from .language import Language, decide, window_offsets
 from .model import WhisperModel
+
+_LANGUAGE_SAMPLES = 5
 
 
 def load_audio(audio_data: bytes):
@@ -35,21 +39,23 @@ class TranscribeSession:
     def load_audio(self, audio_data: bytes):
         self.audio = load_audio(audio_data)
 
-    def run(self, language: str = "") -> dict:
+    def detect_language(self) -> Language:
+        """Sample the recording in several places and let them vote."""
+        offsets = window_offsets(len(self.audio), N_SAMPLES, _LANGUAGE_SAMPLES)
+        votes = [
+            self._model.detect_language(self.audio[offset : offset + N_SAMPLES])
+            for offset in offsets
+        ]
+        return decide(votes)
+
+    def run(self, language: str) -> dict:
         """Transcribe loaded audio. Returns whisperx result dict with segments."""
-        transcribe_kwargs = {"batch_size": 16}
-        if language:
-            transcribe_kwargs["language"] = language
+        return self._model.transcribe(self.audio, batch_size=16, language=language)
 
-        result = self._model.transcribe(self.audio, **transcribe_kwargs)
-        return result
-
-    def align(self, result: dict, language: str = "") -> dict:
+    def align(self, result: dict, language: str) -> dict:
         """Align word-level timestamps on transcription result."""
-        detected_language = language or result.get("language", "en")
-
         align_model, align_metadata = whisperx.load_align_model(
-            language_code=detected_language,
+            language_code=language,
             device=self.device,
         )
         aligned = whisperx.align(

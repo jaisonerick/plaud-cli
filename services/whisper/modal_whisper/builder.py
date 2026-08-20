@@ -6,6 +6,7 @@ from typing import Iterator
 from .compact import Compactor
 from .context import ContextExtractor
 from .density import Density, density
+from .language import Language
 from .diarize import Diarizer
 from .llm import LLMClient
 from .polish import Polisher
@@ -106,16 +107,18 @@ class TranscriptionPipeline:
         yield _update("transcribe", "started")
         session = TranscribeSession(self._whisper_model)
         session.load_audio(audio_data)
-        result = session.run(opts.language)
+        detected = None if opts.language else session.detect_language()
+        language = opts.language or detected.code
+
+        result = session.run(language)
         seg_count = len(result.get("segments", []))
-        detected_language = result.get("language", "")
-        # Use forced language if provided, otherwise use detected
-        effective_language = opts.language or detected_language
-        yield _update("transcribe", "done", detail=f"{seg_count} segments, lang={effective_language}")
+        yield _update(
+            "transcribe", "done", detail=_transcribe_done(seg_count, language, detected)
+        )
 
         # 4. Alignment
         yield _update("align", "started")
-        result = session.align(result, language=opts.language)
+        result = session.align(result, language=language)
         yield _update("align", "done")
 
         # 5. Diarization
@@ -240,6 +243,12 @@ class TranscriptionPipeline:
             "segments": segments,
             "speakers": speaker_map,
             "unpolished": unpolished,
+            "language": {
+                "code": language,
+                "detected": detected is not None,
+                "agreement": detected.agreement if detected else 1.0,
+                "samples": detected.samples if detected else 0,
+            },
             "chars_per_second": (
                 transcript_density.chars_per_second if transcript_density else 0.0
             ),
@@ -256,6 +265,14 @@ class TranscriptionPipeline:
             if event["type"] == "result":
                 result = event
         return {k: v for k, v in result.items() if k != "type"}
+
+
+def _transcribe_done(count: int, language: str, detected: Language | None) -> str:
+    """Name the language, and whether anyone chose it or the audio did."""
+    if detected is None:
+        return f"{count} segments, lang={language}"
+    agreed = f"{round(detected.agreement * detected.samples)}/{detected.samples}"
+    return f"{count} segments, lang={language} detected ({agreed} samples)"
 
 
 def _segments_done(count: int, transcript_density: Density | None) -> str:
