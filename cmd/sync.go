@@ -182,6 +182,7 @@ Examples:
 						hasError = true
 					}
 					reportUnpolished(os.Stderr, result)
+					reportSparse(os.Stderr, result)
 				}
 			}
 

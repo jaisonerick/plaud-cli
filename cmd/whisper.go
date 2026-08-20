@@ -138,6 +138,16 @@ func whisperTranscribe(ctx context.Context, w io.Writer, whisper *modal.HTTPClie
 	return result, audioData, nil
 }
 
+// reportSparse says when a transcript came back holding far less speech than
+// the audio it covers, which is what a decode that collapsed looks like from
+// the outside: a shorter meeting, not an error.
+func reportSparse(w io.Writer, result *modal.TranscribeResult) {
+	if !result.Sparse {
+		return
+	}
+	fmt.Fprintf(w, "Warning: this transcript carries %.1f characters per second of speech, far below what continuous speech produces. Check it before using it.\n", result.CharsPerSecond)
+}
+
 // reportUnpolished names the segments the polisher was refused on. The
 // progress line carries the same count, but it is gone by the time anyone
 // reads the transcript it describes.

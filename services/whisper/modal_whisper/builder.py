@@ -5,6 +5,7 @@ from typing import Iterator
 
 from .compact import Compactor
 from .context import ContextExtractor
+from .density import Density, density
 from .diarize import Diarizer
 from .llm import LLMClient
 from .polish import Polisher
@@ -153,8 +154,11 @@ class TranscriptionPipeline:
         # 7. Segment conversion
         yield _update("segment_convert", "started")
         segments = SegmentConverter(diarized).run(result)
+        transcript_density = density(segments)
         yield _update(
-            "segment_convert", "done", detail=f"{len(segments)} segments"
+            "segment_convert",
+            "done",
+            detail=_segments_done(len(segments), transcript_density),
         )
 
         # 8. Speaker recognition
@@ -236,6 +240,10 @@ class TranscriptionPipeline:
             "segments": segments,
             "speakers": speaker_map,
             "unpolished": unpolished,
+            "chars_per_second": (
+                transcript_density.chars_per_second if transcript_density else 0.0
+            ),
+            "sparse": bool(transcript_density and transcript_density.sparse),
         }
 
     def transcribe(self, audio_data: bytes, opts: TranscribeOptions) -> dict:
@@ -248,6 +256,16 @@ class TranscriptionPipeline:
             if event["type"] == "result":
                 result = event
         return {k: v for k, v in result.items() if k != "type"}
+
+
+def _segments_done(count: int, transcript_density: Density | None) -> str:
+    """Name the converted segments, and say when they came back thin."""
+    if transcript_density is None:
+        return f"{count} segments"
+    rate = f"{transcript_density.chars_per_second:.1f} chars/s"
+    if transcript_density.sparse:
+        return f"{count} segments, {rate} (far below speech)"
+    return f"{count} segments, {rate}"
 
 
 def _polish_done(chunks: int, kept: int) -> str:
