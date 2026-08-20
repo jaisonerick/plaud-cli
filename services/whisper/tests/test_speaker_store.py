@@ -135,3 +135,21 @@ def test_the_database_itself_refuses_a_duplicate(store):
             "INSERT INTO people (folded, first_name, last_name, company, created_by, created_at)"
             " VALUES ('jaison erick', 'Jaison', 'Erick', 'Outra', 'x@y.com', 'now')"
         )
+
+
+def test_transcribing_again_replaces_the_voices_of_that_recording(store):
+    store.save_audio_embeddings("rec-1", {"SPEAKER_00": [0.1] * 8, "SPEAKER_01": [0.2] * 8})
+    store.save_audio_embeddings("rec-1", {"SPEAKER_00": [0.3] * 8})
+
+    voices = store.get_audio_embeddings("rec-1")
+
+    assert list(voices) == ["SPEAKER_00"], "a label from the run before must not survive"
+    assert voices["SPEAKER_00"][0] == pytest.approx(0.3)
+
+
+def test_one_recording_does_not_disturb_another(store):
+    store.save_audio_embeddings("rec-1", {"SPEAKER_00": [0.1] * 8})
+    store.save_audio_embeddings("rec-2", {"SPEAKER_00": [0.9] * 8})
+
+    assert store.get_audio_embeddings("rec-1")["SPEAKER_00"][0] == pytest.approx(0.1)
+    assert store.get_audio_embeddings("rec-2")["SPEAKER_00"][0] == pytest.approx(0.9)

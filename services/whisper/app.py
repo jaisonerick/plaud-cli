@@ -153,10 +153,18 @@ class WhisperTranscriber:
             audio_data = await audio.read()
             opts_json = json.loads(options)
 
+            recording_id = opts_json.get("recording_id", "")
+            if not recording_id:
+                raise HTTPException(
+                    status_code=400,
+                    detail="recording_id is required: the voices of a transcription "
+                           "are found again by the recording they came from",
+                )
+
             opts = TranscribeOptions(
                 language=opts_json.get("language", ""),
                 context_doc=opts_json.get("context_doc", ""),
-                recording_id=opts_json.get("recording_id", ""),
+                recording_id=recording_id,
             )
 
             await speaker_volume.reload.aio()

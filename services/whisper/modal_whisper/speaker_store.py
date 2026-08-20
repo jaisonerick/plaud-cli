@@ -190,9 +190,17 @@ class SpeakerStore:
     # -- per-recording embeddings ---------------------------------------
 
     def save_audio_embeddings(self, audio_id: str, embeddings: dict[str, list[float]]):
+        """Record the voices a recording was separated into, replacing any before.
+
+        Transcribing the same recording again can find a different number of
+        speakers, and a label left over from the run before points at a voice
+        that is no longer there. Naming that label would put a person on
+        somebody else's voice.
+        """
         now = datetime.now(timezone.utc).isoformat()
+        self._conn.execute("DELETE FROM audio_embeddings WHERE audio_id = ?", (audio_id,))
         self._conn.executemany(
-            "INSERT OR REPLACE INTO audio_embeddings (audio_id, speaker_id, embedding, created_at) VALUES (?, ?, ?, ?)",
+            "INSERT INTO audio_embeddings (audio_id, speaker_id, embedding, created_at) VALUES (?, ?, ?, ?)",
             [(audio_id, sid, _pack(vec), now) for sid, vec in embeddings.items()],
         )
         self._conn.commit()

@@ -1,5 +1,4 @@
 import os
-import uuid
 from dataclasses import dataclass, field
 from typing import Iterator
 
@@ -59,7 +58,7 @@ class TranscriptionPipeline:
         # Keyed by the recording it came from, so a caller can name a speaker
         # later knowing only what it already knows. A minted id would have to
         # be written down somewhere, and the only somewhere is a caller's disk.
-        audio_id = opts.recording_id or str(uuid.uuid4())
+        audio_id = opts.recording_id
 
         # 1. Declare pipeline stages
         stages = []
