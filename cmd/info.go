@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"strings"
@@ -34,7 +35,8 @@ var infoCmd = &cobra.Command{
 			fmt.Printf("Tags:       %s\n", strings.Join(detail.Tags, ", "))
 		}
 
-		fmt.Printf("Transcript: %v\n", detail.HasTranscript())
+		fmt.Printf("Transcript on Plaud: %s\n", yesNo(detail.HasTranscript()))
+		fmt.Printf("Transcribed here:    %s\n", transcribedHere(cmd.Context(), args[0]))
 		fmt.Printf("Summary:    %v\n", detail.HasSummary())
 
 		for _, c := range detail.ContentList {
@@ -45,6 +47,31 @@ var infoCmd = &cobra.Command{
 
 		return nil
 	},
+}
+
+func yesNo(is bool) string {
+	if is {
+		return "yes"
+	}
+	return "no"
+}
+
+// transcribedHere answers from the voices the transcription service kept. A
+// transcript made here never reaches Plaud, so Plaud's own record says no
+// however many times a recording has been through this.
+func transcribedHere(ctx context.Context, recordingID string) string {
+	whisper, err := whisperClient()
+	if err != nil {
+		return "unknown — not signed in to the transcription service"
+	}
+	voices, err := whisper.RecordingVoices(ctx, recordingID)
+	if err != nil {
+		return "unknown — the transcription service did not answer"
+	}
+	if len(voices) == 0 {
+		return "no"
+	}
+	return fmt.Sprintf("yes, %d voice(s) on file", len(voices))
 }
 
 func init() {

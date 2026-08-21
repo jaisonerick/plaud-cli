@@ -201,6 +201,24 @@ type VoiceMatch struct {
 	Known    bool     `json:"known"`
 }
 
+// RecordingVoices is the labels this service holds for a recording, which is
+// what says a transcript was made here: one made here never reaches Plaud, and
+// Plaud's own record goes on saying the recording has none.
+func (c *HTTPClient) RecordingVoices(ctx context.Context, recordingID string) ([]string, error) {
+	req, err := c.request(ctx, http.MethodGet, "/speakers/"+url.PathEscape(recordingID), "", nil)
+	if err != nil {
+		return nil, err
+	}
+
+	var result struct {
+		Voices []string `json:"voices"`
+	}
+	if err := c.do(req, &result); err != nil {
+		return nil, err
+	}
+	return result.Voices, nil
+}
+
 // WhoIs asks who each voice of a recording is, by the ids a transcript kept, or
 // by the labels one written before those ids carries.
 func (c *HTTPClient) WhoIs(ctx context.Context, recordingID string, keys []string) ([]VoiceMatch, error) {

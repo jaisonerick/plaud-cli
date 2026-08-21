@@ -135,6 +135,12 @@ Enrollment embeds with the model the diarization pipeline itself uses (`services
 
 The voices live in a SQLite file on a Modal volume, and a container serves whatever view of that volume it last loaded. Writing without reloading first publishes the database as it looked before someone else's write, undoing it while reporting success. Every path that touches a voice goes through `open_speaker_store()` for that reason. A write that is never committed does not get that far at all: it stays in the container that made it, so the voices a transcription separated are gone by the time anyone tries to name them, and reading them back within the same run still works, which is what makes the omission easy to miss.
 
+## Deploying the Transcription Service
+
+`services/whisper` deploys on a push to `main` that touches it, and by hand with `modal deploy app.py`. **A deploy that only changes `app.py` does not reach a container that is already up.** The FastAPI app is built once when a container starts, so a route added there is live only after the container turns over: the deploy reports success either way, and the endpoint goes on serving what it was serving. A change inside `modal_whisper/` does not have this problem, because it rebuilds the image and no old container survives it.
+
+The container idles down after two minutes, so waiting is enough — as long as nothing keeps calling it, and polling to see whether the change landed is what keeps it alive. `modal app stop` forces it. Checking whether a route exists takes no credentials: every route answers 401 without a token, and 404 is the route not being there at all.
+
 ## Config Files
 
 All stored in `~/.config/plaud/` with 0600 permissions:

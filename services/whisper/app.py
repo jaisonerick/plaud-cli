@@ -237,6 +237,21 @@ class WhisperTranscriber:
             await speaker_volume.commit.aio()
             return {"person": _person_json(person), "voices": voices}
 
+        @api.get("/speakers/{audio_id}")
+        async def recording_voices(audio_id: str, who: Identity = Depends(caller)):
+            """The voices this service holds for a recording.
+
+            A transcript made here never reaches Plaud, whose own record goes
+            on saying the recording has none. What answers whether it was
+            transcribed is the voices it left behind.
+            """
+            store = await open_speaker_store()
+            try:
+                labels = sorted(store.get_audio_embeddings(audio_id))
+            finally:
+                store.close()
+            return {"voices": labels}
+
         @api.post("/speakers/{audio_id}/whois")
         async def whois(
             audio_id: str,
