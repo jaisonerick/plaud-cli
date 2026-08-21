@@ -5,10 +5,12 @@ import (
 	"fmt"
 	"io"
 	"math"
+	"os"
 
 	"github.com/jaisonerick/plaud-cli/internal/auth"
 	"github.com/jaisonerick/plaud-cli/internal/modal"
 	"github.com/jaisonerick/plaud-cli/internal/progress"
+	"github.com/jaisonerick/plaud-cli/internal/transcript"
 )
 
 // whisperClient builds a client that signs each request with the Google
@@ -169,8 +171,27 @@ func segmentCount(n int) string {
 	return fmt.Sprintf("%d segments", n)
 }
 
-// saveWhisperTranscript writes a transcript. The voices that spoke it stay on
-// the server, which knows them by the recording they came from.
+// saveWhisperTranscript writes a transcript, and in markdown the ids of the
+// voices in it. The voices themselves stay on the server; what the file keeps
+// is which one each name stands for, so a name settled later can replace it.
 func saveWhisperTranscript(result *modal.TranscribeResult, format, dest string) error {
-	return saveTranscript(result.Segments, format, dest)
+	if format != "md" || len(result.Voices) == 0 {
+		return saveTranscript(result.Segments, format, dest)
+	}
+
+	_, content := transcript.Format(result.Segments, format)
+	return os.WriteFile(dest, []byte(transcript.WriteVoices(content, voiceBlockOf(result))), 0644)
+}
+
+// voiceBlockOf pairs each name the transcript writes with the voices behind it.
+func voiceBlockOf(result *modal.TranscribeResult) transcript.VoiceBlock {
+	block := transcript.VoiceBlock{}
+	for label, id := range result.Voices {
+		name := result.Speakers[label]
+		if name == "" {
+			name = label
+		}
+		block[name] = append(block[name], id)
+	}
+	return block
 }

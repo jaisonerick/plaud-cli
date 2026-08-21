@@ -86,7 +86,17 @@ Which engine ran is not a choice a caller makes, and the CLI does not offer one.
 
 `--context` is required, and takes any file describing the recording. It is what settles how the names in it are spelt; without it the polisher guesses, and it guesses differently on each run, so two transcripts of the same people disagree.
 
-Both take one recording by id, or every recording a filter keeps, and both skip what is already on disk unless `--force` says otherwise. The output directory is the record of what has been done, so there is no state file to go stale. `internal/transcript` names the file, and the same name is what makes the skip work.
+Both take one recording by id, or every recording a filter keeps. `download` skips what is already on disk unless `--force` says otherwise. The output directory is the record of what has been done, so there is no state file to go stale. `internal/transcript` names the file, and the same name is what makes the skip work.
+
+`transcript` does not skip a file it finds: it settles again who the voices in it are. A voice named after a transcript was written leaves that transcript calling somebody SPEAKER_03 forever, and nothing else would fix it, since the text lives only in that file.
+
+**A name is a rendering; the id is the record.** A markdown transcript carries, in its front matter, which voice each name in it stands for: `"Jaison Erick (NexaEdge)": [v_7f3a91]`. `POST /speakers/{id}/whois` takes those ids, finds the embedding each one was stored with and answers who it is against the people known today. No audio is fetched and nothing is decoded. What it costs is one request.
+
+The id is what makes this exact. A label is one run's numbering, and transcribing again renumbers it, so the SPEAKER_03 of an old file and the SPEAKER_03 in the store are the same string and not the same voice. An id is never handed out twice: a transcript whose recording was separated again asks about voices that no longer exist and is told so, instead of being answered with whoever holds that number now. A file written before the ids has only its labels to ask by, and that answers while the recording has not been transcribed again.
+
+One name can hold more than one voice, since diarization splits a person as readily as it merges two. When the voices under one name disagree about who they are, the name stands and the run says so: two voices under one name are either a person who was split, which agrees, or a name given to the wrong voice, which is for a person to settle.
+
+Only markdown is refreshed, and the rewrite replaces the name on the turn's own line, leaving every other byte alone: a filed transcript gains front matter and corrections after it is written, and rendering it again would drop them.
 
 Nothing the caller knows about a recording reaches the decoder. Whisper reads a prompt as the transcript so far and carries on writing it, and the batched pipeline hands that same prompt to every window of the audio, so a term supplied up front becomes a term the recording contains. `--context` is read at the other end, in polishing, where a wrong guess costs a word instead of the speech around it. A decode that collapses returns less text for the same speech rather than an error, so the pipeline measures characters per second of speech and the CLI says so when a transcript lands far below it.
 

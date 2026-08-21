@@ -47,8 +47,12 @@ barely changes.
 A transcript that already exists is reused. --force transcribes the audio
 again, which is what to reach for when the one on record is an old one.
 
-Naming a recording does one. A filter, or --all, does every recording it keeps,
-skipping the ones already written unless --force says otherwise.
+A transcript already written here is not skipped: the file keeps the id of each
+voice in it, so a name settled since replaces the one written at the time. That
+is a lookup and a comparison of voices already on the service — no audio is
+fetched and nothing is decoded.
+
+Naming a recording does one. A filter, or --all, does every recording it keeps.
 
 Examples:
   plaud transcript abc123 --context ./meeting-prep.md
@@ -87,10 +91,6 @@ Examples:
 		}
 
 		pending := plan(recordings)
-		if len(pending) == 0 {
-			fmt.Fprintln(os.Stderr, "Every recording already has its transcript here. Pass --force to write them again.")
-			return nil
-		}
 
 		// Resolve the service once: a missing credential should fail before
 		// the first recording rather than once per recording.
@@ -99,19 +99,33 @@ Examples:
 			return err
 		}
 
-		var failed int
+		var toWrite int
 		for _, job := range pending {
-			if len(pending) > 1 {
+			if !job.written {
+				toWrite++
+			}
+		}
+		if toWrite > 1 {
+			fmt.Fprintf(os.Stderr, "Transcribing %d recording(s); the %d already on disk have their voices checked against the audio.\n", toWrite, len(pending)-toWrite)
+		}
+
+		var wrote, failed int
+		for _, job := range pending {
+			if !job.written && len(pending) > 1 {
 				fmt.Fprintf(os.Stderr, "\n%s\n", job.recording.Name)
 			}
 			if err := job.run(ctx, whisper); err != nil {
 				fmt.Fprintf(os.Stderr, "Error on %s: %v\n", job.recording.Name, err)
 				failed++
+				continue
+			}
+			if !job.written {
+				wrote++
 			}
 		}
 
 		if len(pending) > 1 {
-			fmt.Fprintf(os.Stderr, "\n%d written, %d failed\n", len(pending)-failed, failed)
+			fmt.Fprintf(os.Stderr, "\n%d written, %d already on disk, %d failed\n", wrote, len(pending)-toWrite, failed)
 		}
 		if failed > 0 {
 			return fmt.Errorf("%d recording(s) failed", failed)
@@ -124,25 +138,35 @@ Examples:
 type job struct {
 	recording api.RecordingSimple
 	dest      string
+	// written says the file is already there, which leaves only the names in
+	// it to bring up to date.
+	written bool
+	// alone says this is the only recording asked for, and so the one case
+	// where a run that changes nothing still owes an answer.
+	alone bool
 }
 
-// plan drops the recordings whose transcript is already on disk. The directory
-// is the record of what has been done, so there is no state file to go stale.
+// plan puts each recording next to the file it belongs in. A transcript
+// already on disk is not skipped: its text is settled, but a voice named after
+// it was written is still called SPEAKER_03 in it.
 func plan(recordings []api.RecordingSimple) []job {
 	var pending []job
 	for _, r := range recordings {
 		dest := filepath.Join(trOutputDir, transcript.BaseName(r.Name, r.StartTime)+transcript.Ext(trFormat))
+		written := false
 		if !trForce {
-			if _, err := os.Stat(dest); err == nil {
-				continue
-			}
+			_, err := os.Stat(dest)
+			written = err == nil
 		}
-		pending = append(pending, job{recording: r, dest: dest})
+		pending = append(pending, job{recording: r, dest: dest, written: written, alone: len(recordings) == 1})
 	}
 	return pending
 }
 
 func (j job) run(ctx context.Context, whisper *modal.HTTPClient) error {
+	if j.written {
+		return j.refreshNames(ctx, whisper)
+	}
 	if !trForce && j.recording.HasTranscript {
 		written, err := j.fromRecord(ctx)
 		if err != nil {
@@ -154,6 +178,152 @@ func (j job) run(ctx context.Context, whisper *modal.HTTPClient) error {
 		}
 	}
 	return j.fromAudio(ctx, whisper)
+}
+
+// refreshNames settles again who the voices of a transcript already on disk
+// are. It reads the ids the file kept, asks the service who each one is today,
+// and rewrites the names it wrote before.
+//
+// Nothing here listens to audio: the voices of that recording were embedded
+// when it was transcribed and are still on the service, so this is a lookup by
+// id and a comparison of embeddings. A transcript written before those ids
+// asks by its labels, which answers as long as the recording has not been
+// separated again since.
+func (j job) refreshNames(ctx context.Context, whisper *modal.HTTPClient) error {
+	if trFormat != "md" {
+		if j.alone {
+			fmt.Fprintf(os.Stderr, "%s is already there; only a markdown transcript can have its names refreshed.\n", j.dest)
+		}
+		return nil
+	}
+
+	content, err := os.ReadFile(j.dest)
+	if err != nil {
+		return fmt.Errorf("reading %s: %w", j.dest, err)
+	}
+	turns := transcript.ReadTurns(string(content))
+	if len(turns) == 0 {
+		if j.alone {
+			fmt.Fprintf(os.Stderr, "%s holds no turn this tool can read.\n", j.dest)
+		}
+		return nil
+	}
+
+	voices := transcript.ReadVoices(string(content))
+	kept := voices != nil
+	if !kept {
+		voices = labelsAsVoices(turns)
+	}
+
+	var keys []string
+	for _, ids := range voices {
+		keys = append(keys, ids...)
+	}
+	found, err := whisper.WhoIs(ctx, j.recording.ID, keys)
+	if err != nil {
+		return fmt.Errorf("asking who the voices are: %w", err)
+	}
+	names := map[string]string{}
+	settledIDs := map[string]string{}
+	for _, voice := range found {
+		names[voice.Key] = voice.Name
+		if voice.Voice != "" {
+			names[voice.Voice] = voice.Name
+			settledIDs[voice.Key] = voice.Voice
+		}
+	}
+	// A file that asked by its labels learns the ids behind them, and stops
+	// depending on a numbering the next transcription would replace. A label
+	// nothing answered for is left out rather than written down: the file not
+	// knowing which voice a name was is the truth, and an id that never
+	// existed would read like a record.
+	for written, ids := range voices {
+		var known []string
+		for _, id := range ids {
+			if settled, ok := settledIDs[id]; ok {
+				known = append(known, settled)
+				continue
+			}
+			if kept {
+				known = append(known, id)
+			}
+		}
+		if len(known) == 0 {
+			delete(voices, written)
+			continue
+		}
+		voices[written] = known
+	}
+
+	rename := map[string]string{}
+	for written, ids := range voices {
+		settled, split := agreedName(ids, names)
+		if split {
+			fmt.Fprintf(os.Stderr, "%s: the voices written as %q are not the same person, so the name stands\n", j.dest, written)
+			continue
+		}
+		if settled != "" && settled != written {
+			rename[written] = settled
+		}
+	}
+	if len(rename) == 0 && kept {
+		if j.alone {
+			fmt.Fprintf(os.Stderr, "%s already names every voice the service can place.\n", j.dest)
+		}
+		return nil
+	}
+
+	lines := map[int]string{}
+	for _, turn := range turns {
+		if name, ok := rename[turn.Speaker]; ok {
+			lines[turn.Line] = name
+		}
+	}
+	updated, renamed := transcript.RewriteSpeakers(string(content), lines)
+	for written, settled := range rename {
+		voices.Rename(written, settled)
+	}
+	updated = transcript.WriteVoices(updated, voices)
+
+	if err := os.WriteFile(j.dest, []byte(updated), 0644); err != nil {
+		return fmt.Errorf("writing %s: %w", j.dest, err)
+	}
+	if renamed == 0 {
+		fmt.Fprintf(os.Stderr, "Wrote down which voice each name in %s stands for\n", j.dest)
+		return nil
+	}
+	fmt.Fprintf(os.Stderr, "Named %d turn(s) in %s\n", renamed, j.dest)
+	return nil
+}
+
+// labelsAsVoices reads a transcript written before voices had ids, where the
+// label is all there is to ask by.
+func labelsAsVoices(turns []transcript.Turn) transcript.VoiceBlock {
+	voices := transcript.VoiceBlock{}
+	for _, turn := range turns {
+		if _, seen := voices[turn.Speaker]; !seen {
+			voices[turn.Speaker] = []string{turn.Speaker}
+		}
+	}
+	return voices
+}
+
+// agreedName is who a name in the file stands for, when every voice written
+// under it agrees. It reports a disagreement rather than picking one: two
+// voices under one name mean either a person the diarization split, which
+// agrees, or a name given to the wrong voice, which is for a person to settle.
+func agreedName(ids []string, names map[string]string) (name string, split bool) {
+	for _, id := range ids {
+		settled := names[id]
+		if settled == "" {
+			continue
+		}
+		if name != "" && settled != name {
+			return "", true
+		}
+		name = settled
+	}
+	return name, false
 }
 
 // fromRecord writes the transcript already on record. It reports whether it

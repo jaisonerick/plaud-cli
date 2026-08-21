@@ -72,6 +72,10 @@ type TranscribeResult struct {
 	AudioID  string               `json:"audio_id"`
 	Segments []transcript.Segment `json:"segments"`
 	Speakers map[string]string    `json:"speakers"`
+	// Voices is the id each label was given when this run's voices were
+	// stored. What a transcript writes down is the id: a label is this run's
+	// numbering and answers for nothing once the recording is separated again.
+	Voices map[string]string `json:"voices"`
 	// Refused counts the corrections the guard would not take, and Unanswered
 	// the segments whose chunk came back carrying none even on a second ask.
 	// Both stand as the recogniser wrote them, for different reasons.
@@ -108,6 +112,7 @@ type SSEEvent struct {
 	AudioID        string               `json:"audio_id,omitempty"`
 	Segments       []transcript.Segment `json:"segments,omitempty"`
 	Speakers       map[string]string    `json:"speakers,omitempty"`
+	Voices         map[string]string    `json:"voices,omitempty"`
 	Refused        int                  `json:"refused,omitempty"`
 	Unanswered     int                  `json:"unanswered,omitempty"`
 	Language       Language             `json:"language,omitempty"`
@@ -125,6 +130,7 @@ func (e SSEEvent) Result() *TranscribeResult {
 		AudioID:        e.AudioID,
 		Segments:       e.Segments,
 		Speakers:       e.Speakers,
+		Voices:         e.Voices,
 		Refused:        e.Refused,
 		Unanswered:     e.Unanswered,
 		Language:       e.Language,

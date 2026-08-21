@@ -1,10 +1,14 @@
 import math
 
+# What counts as the same voice. Transcription and any later question about a
+# recording's voices must answer alike, so the number lives here only.
+DEFAULT_THRESHOLD = 0.35
+
 
 class SpeakerMatcher:
     """Match new speaker embeddings against known speaker samples using cosine similarity."""
 
-    def __init__(self, known_samples: list[tuple[int, str, list[float]]], threshold: float = 0.35):
+    def __init__(self, known_samples: list[tuple[int, str, list[float]]], threshold: float = DEFAULT_THRESHOLD):
         self.known_samples = known_samples  # [(id, name, embedding), ...]
         self.threshold = threshold
 
@@ -49,6 +53,24 @@ class SpeakerMatcher:
                 mapping[sid] = sid
 
         return mapping
+
+
+def nearest(
+    embedding: list[float], known_samples: list[tuple[int, str, list[float]]]
+) -> tuple[str, float] | None:
+    """The person this voice sounds most like, and how far away they are.
+
+    Answers for one voice on its own, unlike match(), which hands out each
+    person once: a diarization that split one person into two labels is a real
+    thing, and both halves are that person.
+    """
+    if not known_samples:
+        return None
+    name, distance = min(
+        ((name, _cosine_distance(embedding, known)) for _, name, known in known_samples),
+        key=lambda pair: pair[1],
+    )
+    return name, distance
 
 
 def _cosine_distance(a: list[float], b: list[float]) -> float:

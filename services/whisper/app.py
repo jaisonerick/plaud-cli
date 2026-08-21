@@ -237,6 +237,56 @@ class WhisperTranscriber:
             await speaker_volume.commit.aio()
             return {"person": _person_json(person), "voices": voices}
 
+        @api.post("/speakers/{audio_id}/whois")
+        async def whois(
+            audio_id: str,
+            keys: str = Form(...),
+            who: Identity = Depends(caller),
+        ):
+            """Who each voice of a recording is, for the keys a transcript kept.
+
+            A key is the id given to a voice when the recording was separated,
+            or the label a transcript written before those ids carries. Either
+            way the answer comes from the embedding behind it, compared against
+            the people known right now: a name is a thing of today, and the
+            transcript only has to say which voice it meant.
+            """
+            from modal_whisper.speaker_match import DEFAULT_THRESHOLD, nearest
+
+            wanted = json.loads(keys)
+
+            store = await open_speaker_store()
+            try:
+                embeddings = store.voices_of(audio_id, wanted)
+                known = store.all_voices()
+            finally:
+                store.close()
+
+            voices = []
+            for key in wanted:
+                found = embeddings.get(key)
+                if found is None:
+                    voices.append(
+                        {"key": key, "voice": "", "name": "", "distance": None, "known": False}
+                    )
+                    continue
+                voice_id, embedding = found
+                hit = nearest(embedding, known)
+                name, distance = hit if hit else ("", None)
+                if distance is None or distance >= DEFAULT_THRESHOLD:
+                    name = ""
+                voices.append(
+                    {
+                        "key": key,
+                        "voice": voice_id,
+                        "name": name,
+                        "distance": distance,
+                        "known": True,
+                    }
+                )
+
+            return {"voices": voices}
+
         @api.get("/speakers")
         async def list_people():
             store = await open_speaker_store()

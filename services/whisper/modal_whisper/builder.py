@@ -17,7 +17,6 @@ from .transcribe import TranscribeSession
 
 
 # How close a voice has to be to a learned one to be called that person.
-_SPEAKER_THRESHOLD = 0.35
 
 
 @dataclass
@@ -152,13 +151,14 @@ class TranscriptionPipeline:
 
         # 8. Speaker recognition
         speaker_map = {}
+        voice_ids = {}
         if diarized and speaker_embeddings:
             store = SpeakerStore(self._speaker_db_path)
-            store.save_audio_embeddings(audio_id, speaker_embeddings)
+            voice_ids = store.save_audio_embeddings(audio_id, speaker_embeddings)
 
             yield _update("speaker_recognition", "started")
             known = store.all_voices()
-            matcher = SpeakerMatcher(known, _SPEAKER_THRESHOLD)
+            matcher = SpeakerMatcher(known)
             speaker_map = matcher.match(speaker_embeddings)
             matched = sum(1 for k, v in speaker_map.items() if k != v)
             yield _update(
@@ -233,6 +233,10 @@ class TranscriptionPipeline:
             "audio_id": audio_id,
             "segments": segments,
             "speakers": speaker_map,
+            # What each voice is called here belongs to this run's numbering.
+            # The id does not, which is how a transcript still says whose voice
+            # it wrote down after the recording is separated again.
+            "voices": voice_ids,
             "refused": refused,
             "unanswered": unanswered,
             "language": {

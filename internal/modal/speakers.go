@@ -8,6 +8,7 @@ import (
 	"io"
 	"mime/multipart"
 	"net/http"
+	"net/url"
 	"strconv"
 	"strings"
 )
@@ -185,6 +186,50 @@ func (c *HTTPClient) ForgetPerson(ctx context.Context, name string) error {
 		return err
 	}
 	return c.do(req, nil)
+}
+
+// VoiceMatch is who one voice of a recording is today. Name is empty when
+// nobody known is close enough, and Known is false when the recording holds no
+// such voice at all, which is what a transcript from a run since replaced asks.
+type VoiceMatch struct {
+	Key  string `json:"key"`
+	Name string `json:"name"`
+	// Voice is the id of the voice that answered, which a transcript that
+	// asked by a label writes down so it stops depending on one run's numbering.
+	Voice    string   `json:"voice"`
+	Distance *float64 `json:"distance"`
+	Known    bool     `json:"known"`
+}
+
+// WhoIs asks who each voice of a recording is, by the ids a transcript kept, or
+// by the labels one written before those ids carries.
+func (c *HTTPClient) WhoIs(ctx context.Context, recordingID string, keys []string) ([]VoiceMatch, error) {
+	wanted, err := json.Marshal(keys)
+	if err != nil {
+		return nil, fmt.Errorf("marshaling the keys: %w", err)
+	}
+
+	var buf bytes.Buffer
+	writer := multipart.NewWriter(&buf)
+	if err := writer.WriteField("keys", string(wanted)); err != nil {
+		return nil, fmt.Errorf("writing keys field: %w", err)
+	}
+	if err := writer.Close(); err != nil {
+		return nil, fmt.Errorf("closing multipart writer: %w", err)
+	}
+
+	req, err := c.request(ctx, http.MethodPost, "/speakers/"+url.PathEscape(recordingID)+"/whois", writer.FormDataContentType(), &buf)
+	if err != nil {
+		return nil, err
+	}
+
+	var result struct {
+		Voices []VoiceMatch `json:"voices"`
+	}
+	if err := c.do(req, &result); err != nil {
+		return nil, err
+	}
+	return result.Voices, nil
 }
 
 // ListPeople returns everybody the service recognises.

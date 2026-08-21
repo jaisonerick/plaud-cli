@@ -1,3 +1,4 @@
+import hashlib
 import sqlite3
 import struct
 import unicodedata
@@ -59,6 +60,7 @@ class SpeakerStore:
         self._conn.execute("PRAGMA journal_mode=WAL")
         self._conn.execute("PRAGMA foreign_keys=ON")
         self._ensure_tables()
+        self._ensure_voice_ids()
 
     def _ensure_tables(self):
         self._conn.executescript("""
@@ -92,6 +94,27 @@ class SpeakerStore:
             );
 
         """)
+
+    def _ensure_voice_ids(self):
+        """Give every recorded voice an id of its own, once.
+
+        A label is one run's numbering: transcribing again renumbers it, and a
+        transcript written before that then points at somebody else. An id is
+        not handed out twice, so a transcript whose voices were replaced finds
+        nothing rather than the wrong person.
+        """
+        columns = {row["name"] for row in self._conn.execute("PRAGMA table_info(audio_embeddings)")}
+        if "voice_id" not in columns:
+            self._conn.execute("ALTER TABLE audio_embeddings ADD COLUMN voice_id TEXT")
+        for row in self._conn.execute(
+            "SELECT rowid, audio_id, speaker_id, created_at FROM audio_embeddings"
+            " WHERE voice_id IS NULL OR voice_id = ''"
+        ).fetchall():
+            self._conn.execute(
+                "UPDATE audio_embeddings SET voice_id = ? WHERE rowid = ?",
+                (_voice_id(row["audio_id"], row["speaker_id"], row["created_at"]), row["rowid"]),
+            )
+        self._conn.commit()
 
     # -- people ----------------------------------------------------------
 
@@ -189,21 +212,58 @@ class SpeakerStore:
 
     # -- per-recording embeddings ---------------------------------------
 
-    def save_audio_embeddings(self, audio_id: str, embeddings: dict[str, list[float]]):
+    def save_audio_embeddings(
+        self, audio_id: str, embeddings: dict[str, list[float]]
+    ) -> dict[str, str]:
         """Record the voices a recording was separated into, replacing any before.
 
         Transcribing the same recording again can find a different number of
         speakers, and a label left over from the run before points at a voice
         that is no longer there. Naming that label would put a person on
         somebody else's voice.
+
+        Returns the id given to each label, which is what a transcript carries
+        so that it can still say whose voice it wrote down.
         """
         now = datetime.now(timezone.utc).isoformat()
+        voice_ids = {label: _voice_id(audio_id, label, now) for label in embeddings}
         self._conn.execute("DELETE FROM audio_embeddings WHERE audio_id = ?", (audio_id,))
         self._conn.executemany(
-            "INSERT INTO audio_embeddings (audio_id, speaker_id, embedding, created_at) VALUES (?, ?, ?, ?)",
-            [(audio_id, sid, _pack(vec), now) for sid, vec in embeddings.items()],
+            "INSERT INTO audio_embeddings (audio_id, speaker_id, embedding, created_at, voice_id)"
+            " VALUES (?, ?, ?, ?, ?)",
+            [
+                (audio_id, label, _pack(vec), now, voice_ids[label])
+                for label, vec in embeddings.items()
+            ],
         )
         self._conn.commit()
+        return voice_ids
+
+    def voices_of(self, audio_id: str, keys: list[str]) -> dict[str, tuple[str, list[float]]]:
+        """The embedding each key stands for, by voice id or by label.
+
+        Returns the id of the voice that answered next to its embedding, so a
+        transcript that asked by a label can write the id down and stop
+        depending on one run's numbering.
+
+        A transcript written before voices had ids of their own says only
+        SPEAKER_01, and that still answers as long as the recording has not
+        been separated again since.
+        """
+        found = {}
+        for key in keys:
+            row = self._conn.execute(
+                "SELECT voice_id, embedding FROM audio_embeddings WHERE voice_id = ?", (key,)
+            ).fetchone()
+            if row is None:
+                row = self._conn.execute(
+                    "SELECT voice_id, embedding FROM audio_embeddings"
+                    " WHERE audio_id = ? AND speaker_id = ?",
+                    (audio_id, key),
+                ).fetchone()
+            if row is not None:
+                found[key] = (row["voice_id"], _unpack(row["embedding"]))
+        return found
 
     def get_audio_embeddings(self, audio_id: str) -> dict[str, list[float]]:
         rows = self._conn.execute(
@@ -227,6 +287,18 @@ def display(person) -> str:
     """How a person is written wherever anyone reads them."""
     name = " ".join(filter(None, [person["first_name"], person["last_name"]]))
     return f"{name} ({person['company']})"
+
+
+def _voice_id(audio_id: str, speaker_id: str, created_at: str) -> str:
+    """The id of one recorded voice, derived rather than drawn.
+
+    Every container works out the same id for the same row, so an id handed to
+    a transcript holds even if the write that filled it in was never published.
+    Two runs of the same recording differ by when they were stored, which is
+    what keeps a replaced voice from answering to the id of the one before.
+    """
+    seed = f"{audio_id}\x00{speaker_id}\x00{created_at}".encode()
+    return "v_" + hashlib.sha256(seed).hexdigest()[:12]
 
 
 def _pack(vec: list[float]) -> bytes:

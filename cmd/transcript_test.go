@@ -47,3 +47,39 @@ func TestReadContextRefusesAPathThatIsNotThere(t *testing.T) {
 		}
 	}
 }
+
+func TestAgreedNameTakesWhatEveryVoiceOfTheNameSays(t *testing.T) {
+	names := map[string]string{"v_1": "Amanda Destro (Aurora)", "v_2": "Amanda Destro (Aurora)"}
+
+	got, split := agreedName([]string{"v_1", "v_2"}, names)
+
+	if split {
+		t.Fatal("two voices of one person were read as a disagreement")
+	}
+	if got != "Amanda Destro (Aurora)" {
+		t.Errorf("agreed on %q", got)
+	}
+}
+
+func TestAgreedNameReportsVoicesThatDisagree(t *testing.T) {
+	names := map[string]string{"v_1": "Amanda Destro (Aurora)", "v_2": "Matheus Zeni (CERC)"}
+
+	got, split := agreedName([]string{"v_1", "v_2"}, names)
+
+	if !split {
+		t.Fatal("two people under one name were merged into one answer")
+	}
+	if got != "" {
+		t.Errorf("a name came back anyway: %q", got)
+	}
+}
+
+func TestAgreedNameIgnoresAVoiceNobodyCanPlace(t *testing.T) {
+	names := map[string]string{"v_1": "", "v_2": "Amanda Destro (Aurora)"}
+
+	got, split := agreedName([]string{"v_1", "v_2"}, names)
+
+	if split || got != "Amanda Destro (Aurora)" {
+		t.Errorf("got %q, split %v", got, split)
+	}
+}
