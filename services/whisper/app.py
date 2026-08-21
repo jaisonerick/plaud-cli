@@ -27,6 +27,12 @@ model_cache = modal.Volume.from_name("whisper-model-cache", create_if_missing=Tr
 # open file anywhere on a volume blocks reloading all of it.
 speaker_volume = modal.Volume.from_name("whisper-speakers", create_if_missing=True)
 
+# The transcripts this service has made, so that none is made twice. They live
+# apart from the voices because a voice is read on every naming and a
+# transcript only when a recording comes back, and the two grow at different
+# rates.
+transcript_volume = modal.Volume.from_name("whisper-transcripts", create_if_missing=True)
+
 
 def _person_json(person: dict) -> dict:
     """One shape for a person wherever this service returns one."""
@@ -37,6 +43,14 @@ def _person_json(person: dict) -> dict:
         "company": person["company"],
         "created_by": person["created_by"],
     }
+
+
+async def open_transcripts():
+    """The transcript store, on the newest state of its volume."""
+    from modal_whisper.transcript_store import TranscriptStore
+
+    await transcript_volume.reload.aio()
+    return TranscriptStore()
 
 
 async def open_speaker_store():
@@ -61,7 +75,7 @@ async def open_speaker_store():
         modal.Secret.from_name("openrouter-secret"),
         modal.Secret.from_name("google-oauth"),
     ],
-    volumes={"/cache": model_cache, "/speakers": speaker_volume},
+    volumes={"/cache": model_cache, "/speakers": speaker_volume, "/transcripts": transcript_volume},
     timeout=600,
     scaledown_window=120,
 )
@@ -150,6 +164,8 @@ class WhisperTranscriber:
             options: str = Form("{}"),
             stream: bool = False,
         ):
+            from modal_whisper.transcript_store import with_labels, with_names
+
             audio_data = await audio.read()
             opts_json = json.loads(options)
 
@@ -161,6 +177,27 @@ class WhisperTranscriber:
                            "are found again by the recording they came from",
                 )
 
+            # A transcript already made is handed back rather than made again.
+            # Deciding otherwise costs minutes of GPU and, worse, separates the
+            # voices afresh: the labels are renumbered, and every transcript
+            # written from the run before points at voices that are gone.
+            if not opts_json.get("force"):
+                transcripts = await open_transcripts()
+                kept = transcripts.get(recording_id)
+                if kept:
+                    speakers = await _who_they_are_now(kept.get("voices", {}))
+                    kept = {
+                        **kept,
+                        "segments": with_names(kept["segments"], speakers),
+                        "speakers": speakers,
+                        "reused": True,
+                    }
+                    if stream:
+                        return StreamingResponse(
+                            _one_event(kept), media_type="text/event-stream"
+                        )
+                    return JSONResponse(kept)
+
             opts = TranscribeOptions(
                 language=opts_json.get("language", ""),
                 context_doc=opts_json.get("context_doc", ""),
@@ -170,10 +207,24 @@ class WhisperTranscriber:
             await speaker_volume.reload.aio()
             pipeline = TranscriptionPipeline(self.whisper_model, self.llm)
 
+            def keep(result):
+                """Store what was decoded, with the labels the run gave it."""
+                if not result.get("segments"):
+                    return
+                from modal_whisper.transcript_store import TranscriptStore
+
+                TranscriptStore().put(
+                    result["audio_id"],
+                    {**result, "segments": with_labels(result["segments"], result.get("speakers", {}))},
+                )
+                transcript_volume.commit()
+
             if stream:
                 def generate():
                     try:
                         for event in pipeline.transcribe_stream(audio_data, opts):
+                            if event.get("type") == "result":
+                                keep(event)
                             yield f"data: {json.dumps(event)}\n\n"
                     except Exception as err:
                         # Without this the stream just stops, and the client is
@@ -191,51 +242,10 @@ class WhisperTranscriber:
                 )
             else:
                 result = pipeline.transcribe(audio_data, opts)
+                keep(result)
                 await model_cache.commit.aio()
                 await speaker_volume.commit.aio()
                 return JSONResponse(result)
-
-        @api.put("/speakers/{audio_id}/{speaker_id}")
-        async def name_speaker(
-            audio_id: str,
-            speaker_id: str,
-            name: str = Form(...),
-            company: str = Form(...),
-            surname_unknown: bool = Form(False),
-            who: Identity = Depends(caller),
-        ):
-            """Give a diarized voice a person, creating that person if needed."""
-            from modal_whisper.speaker_store import NotFull
-
-            store = await open_speaker_store()
-            try:
-                embedding = store.get_audio_speaker_info(audio_id, speaker_id)
-                if embedding is None:
-                    known = sorted(store.get_audio_embeddings(audio_id))
-                    if known:
-                        detail = (
-                            f"{audio_id} has no speaker {speaker_id!r}. "
-                            f"It has: {', '.join(known)}"
-                        )
-                    else:
-                        detail = (
-                            f"nothing is stored for recording {audio_id} — "
-                            "transcribe it with diarization first"
-                        )
-                    raise HTTPException(status_code=404, detail=detail)
-
-                person_id = store.upsert_person(
-                    name, company, who.email, surname_unknown
-                )
-                voices = store.add_voice(person_id, embedding, who.email)
-                person = store.person(person_id)
-            except NotFull as err:
-                raise HTTPException(status_code=400, detail=str(err)) from err
-            finally:
-                store.close()
-
-            await speaker_volume.commit.aio()
-            return {"person": _person_json(person), "voices": voices}
 
         @api.get("/speakers/{audio_id}")
         async def recording_voices(audio_id: str, who: Identity = Depends(caller)):
@@ -394,6 +404,44 @@ class WhisperTranscriber:
 
         web_app.include_router(api)
         return web_app
+
+
+async def _who_they_are_now(voices: dict) -> dict:
+    """Who each label of a kept transcript is today.
+
+    The transcript holds the id of the voice behind each label, and who that
+    voice is comes from the people known right now: a name settled after a
+    recording was transcribed has to reach the transcript of it.
+    """
+    from modal_whisper.speaker_match import DEFAULT_THRESHOLD, nearest
+
+    if not voices:
+        return {}
+
+    store = await open_speaker_store()
+    try:
+        found = store.voices_of("", list(voices.values()))
+        known = store.all_voices()
+    finally:
+        store.close()
+
+    speakers = {}
+    for label, voice_id in voices.items():
+        speakers[label] = label
+        held = found.get(voice_id)
+        if held is None:
+            continue
+        hit = nearest(held[1], known)
+        if hit and hit[1] < DEFAULT_THRESHOLD:
+            speakers[label] = hit[0]
+    return speakers
+
+
+def _one_event(result: dict):
+    """A transcript that was not made now still arrives as the stream a caller
+    reads: one result, and nothing pretending to be work."""
+    yield f"data: {json.dumps({'type': 'init', 'stages': []})}\n\n"
+    yield f"data: {json.dumps({**result, 'type': 'result'})}\n\n"
 
 
 def _error_event(err: Exception) -> dict:

@@ -89,6 +89,7 @@ Examples:
 		}
 		trOpts.ContextDoc = contextDoc
 		trOpts.Language = trLanguage
+		trOpts.Force = trForce
 
 		recordings, err := chooseRecordings(ctx, args, trFilter, trAll)
 		if err != nil {
@@ -380,7 +381,10 @@ func (j job) fromAudio(ctx context.Context, whisper *modal.HTTPClient) error {
 	if err := saveWhisperTranscript(result, trFormat, j.dest); err != nil {
 		return err
 	}
-	fmt.Fprintf(os.Stderr, "\nSaved to %s\n", j.dest)
+	if result.Reused {
+		fmt.Fprintf(os.Stderr, "\nThe service already had this transcript, so nothing was decoded again.\n")
+	}
+	fmt.Fprintf(os.Stderr, "Saved to %s\n", j.dest)
 	reportLanguage(os.Stderr, result)
 	reportUnpolished(os.Stderr, result)
 	reportSparse(os.Stderr, result)

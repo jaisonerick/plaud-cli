@@ -80,7 +80,11 @@ Only accounts on the domains in `services/whisper/modal_whisper/auth.py` are ser
 
 ## Transcription
 
-`transcript` is the one way to get the text of a recording. It reuses a transcript already on record and transcribes the audio when there is none, and `--force` transcribes again over one that is there, which is what an old transcript deserves. `download` only ever copies a file that exists, which leaves it the audio and the summary.
+`transcript` is the one way to get the text of a recording. **A transcription is made once.** The service keeps what it decoded, and a recording that has been through it comes back in seconds rather than through a GPU; `--force` is what decodes it again, and it is the one thing about a transcription only a caller can decide, because only a caller knows the transcript on record is one to throw away.
+
+Deciding otherwise costs more than the minutes. Transcribing again separates the voices afresh, so the labels are renumbered and every transcript written from the run before points at voices that no longer exist.
+
+What is kept holds the label of each voice, never the person: who a label is comes from the people known on the day it is handed over, so a name settled after a recording was transcribed reaches the transcript of it. **The text of a meeting now lives on the shared service**, readable by anyone signed in on the domains it serves, which is a wider audience than the machine that asked for it. `download` only ever copies a file that exists, which leaves it the audio and the summary.
 
 Which engine ran is not a choice a caller makes, and the CLI does not offer one. Neither are the stages: no flag turns off diarization, polishing, recognition or compaction. The tool exists to finish a transcript, and a caller weighing whether to run one of those is being asked to price the tool rather than use it.
 

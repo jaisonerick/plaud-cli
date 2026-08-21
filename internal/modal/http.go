@@ -65,6 +65,11 @@ type TranscribeOpts struct {
 	RecordingID string `json:"recording_id"`
 	ContextDoc  string `json:"context_doc"`
 	Language    string `json:"language,omitempty"`
+	// Force decodes the audio again over a transcript the service already
+	// holds. Everything else about a transcription is decided there; this is
+	// the one thing only a caller can know, because only a caller knows the
+	// transcript on record is one to throw away.
+	Force bool `json:"force,omitempty"`
 }
 
 // TranscribeResult holds the structured response from a transcription.
@@ -76,6 +81,9 @@ type TranscribeResult struct {
 	// stored. What a transcript writes down is the id: a label is this run's
 	// numbering and answers for nothing once the recording is separated again.
 	Voices map[string]string `json:"voices"`
+	// Reused says the service handed back a transcript it already had, so
+	// nothing was decoded and the voices of that recording are untouched.
+	Reused bool `json:"reused,omitempty"`
 	// Refused counts the corrections the guard would not take, and Unanswered
 	// the segments whose chunk came back carrying none even on a second ask.
 	// Both stand as the recogniser wrote them, for different reasons.
@@ -113,6 +121,7 @@ type SSEEvent struct {
 	Segments       []transcript.Segment `json:"segments,omitempty"`
 	Speakers       map[string]string    `json:"speakers,omitempty"`
 	Voices         map[string]string    `json:"voices,omitempty"`
+	Reused         bool                 `json:"reused,omitempty"`
 	Refused        int                  `json:"refused,omitempty"`
 	Unanswered     int                  `json:"unanswered,omitempty"`
 	Language       Language             `json:"language,omitempty"`
@@ -131,6 +140,7 @@ func (e SSEEvent) Result() *TranscribeResult {
 		Segments:       e.Segments,
 		Speakers:       e.Speakers,
 		Voices:         e.Voices,
+		Reused:         e.Reused,
 		Refused:        e.Refused,
 		Unanswered:     e.Unanswered,
 		Language:       e.Language,
