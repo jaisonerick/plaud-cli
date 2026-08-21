@@ -11,6 +11,7 @@ from .llm import LLMClient
 from .polish import Polisher
 from .segments import SegmentConverter
 from .speaker_match import SpeakerMatcher
+from .speech import holds_speech, keep_speech
 from .speaker_store import DEFAULT_DB_PATH, SpeakerStore
 from .model import WhisperModel
 from .transcribe import TranscribeSession
@@ -97,9 +98,32 @@ class TranscriptionPipeline:
         language = opts.language or detected.code
 
         result = session.run(language)
+        result, disbelieved = keep_speech(result)
         seg_count = len(result.get("segments", []))
+        if not holds_speech(result):
+            yield _update("transcribe", "done", detail="no speech")
+            yield {
+                "type": "result",
+                "audio_id": audio_id,
+                "segments": [],
+                "speakers": {},
+                "voices": {},
+                "refused": 0,
+                "unanswered": 0,
+                "language": {
+                    "code": language,
+                    "detected": detected is not None,
+                    "agreement": detected.agreement if detected else 1.0,
+                    "samples": detected.samples if detected else 0,
+                },
+                "chars_per_second": 0.0,
+                "sparse": False,
+            }
+            return
         yield _update(
-            "transcribe", "done", detail=_transcribe_done(seg_count, language, detected)
+            "transcribe",
+            "done",
+            detail=_transcribe_done(seg_count, language, detected, len(disbelieved)),
         )
 
         # 4. Alignment
@@ -263,12 +287,18 @@ class TranscriptionPipeline:
         return {k: v for k, v in result.items() if k != "type"}
 
 
-def _transcribe_done(count: int, language: str, detected: Language | None) -> str:
-    """Name the language, and whether anyone chose it or the audio did."""
-    if detected is None:
-        return f"{count} segments, lang={language}"
-    agreed = f"{round(detected.agreement * detected.samples)}/{detected.samples}"
-    return f"{count} segments, lang={language} detected ({agreed} samples)"
+def _transcribe_done(
+    count: int, language: str, detected: Language | None, disbelieved: int = 0
+) -> str:
+    """Name the language, whether anyone chose it or the audio did, and what
+    the decoder itself would not stand behind."""
+    said = f"{count} segments, lang={language}"
+    if detected is not None:
+        agreed = f"{round(detected.agreement * detected.samples)}/{detected.samples}"
+        said += f" detected ({agreed} samples)"
+    if disbelieved:
+        said += f", {disbelieved} dropped as noise"
+    return said
 
 
 def _segments_done(count: int, transcript_density: Density | None) -> str:

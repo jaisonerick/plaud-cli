@@ -11,7 +11,6 @@ from .model import WhisperModel
 
 _LANGUAGE_SAMPLES = 5
 
-
 def load_audio(audio_data: bytes):
     """Decode audio bytes into the 16kHz array every stage here works on."""
     with tempfile.NamedTemporaryFile(suffix=".mp3", delete=False) as f:

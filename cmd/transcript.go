@@ -370,6 +370,13 @@ func (j job) fromAudio(ctx context.Context, whisper *modal.HTTPClient) error {
 	if err != nil {
 		return err
 	}
+	// A recording of a microphone being put down has no transcript to write,
+	// and writing an empty file over the name of one is worse than saying so:
+	// the next run would find that file and take the recording for done.
+	if len(result.Segments) == 0 {
+		fmt.Fprintf(os.Stderr, "%s holds no speech, so nothing was written.\n", j.recording.Name)
+		return nil
+	}
 	if err := saveWhisperTranscript(result, trFormat, j.dest); err != nil {
 		return err
 	}
