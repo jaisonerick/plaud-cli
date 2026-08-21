@@ -7,44 +7,69 @@ import (
 	"testing"
 )
 
-func TestReadContextTakesTheDescriptionItself(t *testing.T) {
-	written := "Reunião da Vexia com a CERC sobre pagamentos. Éricles Bento, Zeni."
+func TestContextTakesTheDescriptionItself(t *testing.T) {
+	written := "Reunião da Vexia com a CERC em 12/08/2026. Éricles Bento, Zeni."
 
-	got, err := readContext(written)
+	got, err := readContext(written, "")
 	if err != nil {
-		t.Fatalf("readContext(%q) errored: %v", written, err)
+		t.Fatalf("readContext errored: %v", err)
 	}
 	if got != written {
 		t.Errorf("readContext = %q, want the description back", got)
 	}
 }
 
-func TestReadContextTakesAFile(t *testing.T) {
+func TestContextFileIsRead(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "briefing.md")
 	if err := os.WriteFile(path, []byte("# Briefing\nCERC, Vexia."), 0644); err != nil {
 		t.Fatal(err)
 	}
 
-	got, err := readContext(path)
+	got, err := readContext("", path)
 	if err != nil {
 		t.Fatalf("readContext errored: %v", err)
 	}
 	if !strings.Contains(got, "CERC, Vexia.") {
-		t.Errorf("readContext = %q, want the file's contents", got)
+		t.Errorf("the file was not read: %q", got)
 	}
 }
 
-// A mistyped path read as prose polishes a transcript against the name of a
-// file, which is worse than refusing: it looks like it worked.
-func TestReadContextRefusesAPathThatIsNotThere(t *testing.T) {
-	for _, value := range []string{
-		"contexto/breifing.md",
-		"briefing.md",
-		"./nope.txt",
-	} {
-		if _, err := readContext(value); err == nil {
-			t.Errorf("readContext(%q) accepted a missing file as prose", value)
-		}
+func TestContextFileThatIsNotThereIsRefused(t *testing.T) {
+	_, err := readContext("", filepath.Join(t.TempDir(), "gone.md"))
+	if err == nil {
+		t.Fatal("a missing context file was accepted")
+	}
+}
+
+// The description is text even when it reads like a path, which is what the
+// guessing got wrong: a date in Portuguese carries a slash.
+func TestADescriptionWithASlashIsStillTheDescription(t *testing.T) {
+	written := "Semanal de 12/08/2026 com a Vexia"
+
+	got, err := readContext(written, "")
+	if err != nil || got != written {
+		t.Errorf("got %q, err %v", got, err)
+	}
+}
+
+func TestAFileNamedAsTheDescriptionIsRefused(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "briefing.md")
+	if err := os.WriteFile(path, []byte("CERC"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err := readContext(path, "")
+	if err == nil {
+		t.Fatal("a file passed as the description was read as prose")
+	}
+	if !strings.Contains(err.Error(), "--context-file") {
+		t.Errorf("the error does not say which flag reads a file: %v", err)
+	}
+}
+
+func TestTheTwoContextFlagsAreNotBothTaken(t *testing.T) {
+	if _, err := readContext("uma descrição", "/tmp/x.md"); err == nil {
+		t.Fatal("both flags were accepted at once")
 	}
 }
 

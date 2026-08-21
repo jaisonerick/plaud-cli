@@ -84,7 +84,9 @@ Only accounts on the domains in `services/whisper/modal_whisper/auth.py` are ser
 
 Which engine ran is not a choice a caller makes, and the CLI does not offer one. Neither are the stages: no flag turns off diarization, polishing, recognition or compaction. The tool exists to finish a transcript, and a caller weighing whether to run one of those is being asked to price the tool rather than use it.
 
-`--context` is required, and takes any file describing the recording. It is what settles how the names in it are spelt; without it the polisher guesses, and it guesses differently on each run, so two transcripts of the same people disagree.
+One of `--context` or `--context-file` is required: the description written out, or a file holding it. It is what settles how the names in it are spelt; without it the polisher guesses, and it guesses differently on each run, so two transcripts of the same people disagree. Which of the two it is used to be guessed from the value, and that guess was wrong in both directions: a description in Portuguese carries a date, a date carries a slash, and a slash read as a path turned the sentence into a filename nobody could open. `--context` now refuses a value that names a file that exists, rather than polishing a transcript against a path.
+
+A context that does not name the people and companies in the recording is worse than a short one that does: the polisher writes a company it half-heard into a name it recognises from what it was given, so a briefing about other clients turns a real name into theirs.
 
 Both take one recording by id, or every recording a filter keeps. `download` skips what is already on disk unless `--force` says otherwise. The output directory is the record of what has been done, so there is no state file to go stale. `internal/transcript` names the file, and the same name is what makes the skip work.
 

@@ -9,6 +9,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
 	"time"
 
@@ -114,10 +115,37 @@ func CheckForUpdate() {
 }
 
 func notifyUpdate(current, latest string) {
-	if latest == "" || latest == current {
+	if !newerThan(latest, current) {
 		return
 	}
 	fmt.Fprintf(os.Stderr, "\nA new version of plaud is available: v%s → v%s\nRun `plaud update` to upgrade.\n", current, latest)
+}
+
+// newerThan reports whether one release is later than another. The check is
+// what keeps a stale answer quiet: the last one is remembered for a day, so a
+// machine that upgrades meanwhile would otherwise be told to move to the
+// version it just left.
+func newerThan(release, than string) bool {
+	a, b := strings.Split(release, "."), strings.Split(than, ".")
+	for i := 0; i < len(a) || i < len(b); i++ {
+		if x, y := versionPart(a, i), versionPart(b, i); x != y {
+			return x > y
+		}
+	}
+	return false
+}
+
+// versionPart is one dotted number, with anything unreadable sorting older so
+// that a version nobody can compare never nags.
+func versionPart(fields []string, i int) int {
+	if i >= len(fields) {
+		return 0
+	}
+	n, err := strconv.Atoi(fields[i])
+	if err != nil {
+		return -1
+	}
+	return n
 }
 
 func init() {

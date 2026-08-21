@@ -19,16 +19,17 @@ import (
 )
 
 var (
-	trFilter    recordingFilter
-	trAll       bool
-	trForce     bool
-	trOutputDir string
-	trFormat    string
-	trContext   string
-	trLanguage  string
-	trInto      string
-	trIdentify  bool
-	trOpts      modal.TranscribeOpts
+	trFilter      recordingFilter
+	trAll         bool
+	trForce       bool
+	trOutputDir   string
+	trFormat      string
+	trContext     string
+	trContextFile string
+	trLanguage    string
+	trInto        string
+	trIdentify    bool
+	trOpts        modal.TranscribeOpts
 )
 
 var transcriptCmd = &cobra.Command{
@@ -37,10 +38,10 @@ var transcriptCmd = &cobra.Command{
 	Short:   "Write the transcript of a recording, or of many",
 	Long: `Put the text of a recording on disk.
 
---context is required. It takes a file describing the recording — an agenda,
-prep notes, a briefing — or the description itself, written out. It is what
-settles how the names in it are spelt, and transcripts of the same people
-drift apart without it. A document covering the whole engagement serves every
+One of --context or --context-file is required. --context-file reads a file
+describing the recording — an agenda, prep notes, a briefing; --context takes
+that description written out. It is what settles how the names in it are
+spelt, and transcripts of the same people drift apart without it. A document covering the whole engagement serves every
 recording in it: what the polisher reads out of it is who the people are and
 how their names and systems are spelt, which the subject of one meeting
 barely changes.
@@ -59,12 +60,12 @@ Naming a recording does one. A filter, or --all, does every recording it keeps.
 refreshes the names in it when it is already there.
 
 Examples:
-  plaud transcript abc123 --context ./meeting-prep.md
+  plaud transcript abc123 --context-file ./meeting-prep.md
   plaud transcript abc123 --context "Vexia and CERC on payments; Éricles Bento, Zeni"
-  plaud transcript abc123 --context ./prep.md --identify
-  plaud transcript abc123 --context ./prep.md --force
-  plaud transcript --since 2026-08-01 --context ./briefing.md --output-dir ./recordings
-  plaud transcript --tag cliente --context ./briefing.md --format srt`,
+  plaud transcript abc123 --context-file ./prep.md --identify
+  plaud transcript abc123 --context-file ./prep.md --force
+  plaud transcript --since 2026-08-01 --context-file ./briefing.md --output-dir ./recordings
+  plaud transcript --tag cliente --context-file ./briefing.md --format srt`,
 	Args: cobra.MaximumNArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		ctx := cmd.Context()
@@ -82,7 +83,7 @@ Examples:
 
 		// Before anything is fetched: a context that cannot be read is worth
 		// saying so about while it still costs nothing.
-		contextDoc, err := readContext(trContext)
+		contextDoc, err := readContext(trContext, trContextFile)
 		if err != nil {
 			return err
 		}
@@ -502,35 +503,28 @@ func validateFormat(format string) error {
 	}
 }
 
-// readContext takes either a file describing the recording or the description
-// itself. Knowing something about a recording and having written it down are
-// different things, and demanding the second is what makes a caller invent a
-// document for a meeting they cannot yet describe.
-func readContext(value string) (string, error) {
-	data, err := os.ReadFile(value)
-	if err == nil {
+// readContext takes what describes the recording, from the flag that says
+// which of the two it is.
+//
+// Guessing between the two is what this replaces: a description in Portuguese
+// carries a date, a date carries a slash, and a slash read as a path turned
+// the sentence into a filename nobody could open. Worse, the guess that went
+// the other way polished a transcript against the name of a file.
+func readContext(text, path string) (string, error) {
+	if path != "" {
+		if text != "" {
+			return "", fmt.Errorf("--context and --context-file say the same thing twice; pass one")
+		}
+		data, err := os.ReadFile(path)
+		if err != nil {
+			return "", fmt.Errorf("reading the context file: %w", err)
+		}
 		return string(data), nil
 	}
-	if !os.IsNotExist(err) {
-		return "", fmt.Errorf("reading context file: %w", err)
+	if _, err := os.Stat(text); err == nil {
+		return "", fmt.Errorf("%q is a file that exists, and --context is the description itself — pass --context-file to read it", text)
 	}
-	// A value shaped like a path was meant as one, and a mistyped path read as
-	// prose is a transcript polished against the name of a file.
-	if looksLikePath(value) {
-		return "", fmt.Errorf("no context file at %q", value)
-	}
-	return value, nil
-}
-
-func looksLikePath(value string) bool {
-	if strings.ContainsAny(value, "/\\") {
-		return true
-	}
-	switch strings.ToLower(filepath.Ext(value)) {
-	case ".md", ".txt", ".markdown", ".rst", ".org":
-		return true
-	}
-	return false
+	return text, nil
 }
 
 // must fails the build of a command rather than the run of it: a flag that
@@ -550,8 +544,9 @@ func init() {
 	f.StringVar(&trInto, "into", "", "write one recording to exactly this file, refreshing the names when it is there")
 	f.StringVar(&trFormat, "format", "md", "output format: json, txt, srt, md")
 	f.StringVar(&trLanguage, "language", "", "force a language code (e.g. pt, en), empty to detect it")
-	f.StringVar(&trContext, "context", "", "a file describing the recording, or the description itself; settles how names are spelt")
+	f.StringVar(&trContext, "context", "", "what the recording is about, written out; settles how names are spelt")
+	f.StringVar(&trContextFile, "context-file", "", "a file describing the recording, read as the context")
 	f.BoolVar(&trIdentify, "identify", false, "ask who the unrecognised voices are once the transcript is written")
-	must(transcriptCmd.MarkFlagRequired("context"))
+	transcriptCmd.MarkFlagsOneRequired("context", "context-file")
 	rootCmd.AddCommand(transcriptCmd)
 }

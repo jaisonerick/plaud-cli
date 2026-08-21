@@ -20,10 +20,10 @@ var (
 )
 
 var rootCmd = &cobra.Command{
-	Use:           "plaud",
-	Short:         "CLI client for Plaud.ai",
-	Version:       Version,
-	SilenceUsage:  true,
+	Use:          "plaud",
+	Short:        "CLI client for Plaud.ai",
+	Version:      Version,
+	SilenceUsage: true,
 	PersistentPostRun: func(cmd *cobra.Command, args []string) {
 		if cmd.Name() != "update" {
 			CheckForUpdate()
