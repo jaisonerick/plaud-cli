@@ -236,5 +236,6 @@ func init() {
 	speakerCmd.AddCommand(speakerForgetCmd)
 	speakerCmd.AddCommand(speakerListCmd)
 	speakerCmd.AddCommand(speakerEnrollCmd)
+	speakerCmd.AddCommand(speakerTeachCmd)
 	rootCmd.AddCommand(speakerCmd)
 }
