@@ -26,6 +26,7 @@ var (
 	trFormat    string
 	trContext   string
 	trLanguage  string
+	trInto      string
 	trIdentify  bool
 	trOpts      modal.TranscribeOpts
 )
@@ -54,6 +55,9 @@ fetched and nothing is decoded.
 
 Naming a recording does one. A filter, or --all, does every recording it keeps.
 
+--into writes one recording to exactly that file, whatever it is called, and
+refreshes the names in it when it is already there.
+
 Examples:
   plaud transcript abc123 --context ./meeting-prep.md
   plaud transcript abc123 --context "Vexia and CERC on payments; Éricles Bento, Zeni"
@@ -68,7 +72,11 @@ Examples:
 		if err := validateFormat(trFormat); err != nil {
 			return err
 		}
-		if err := os.MkdirAll(trOutputDir, 0755); err != nil {
+		outputDir := trOutputDir
+		if trInto != "" {
+			outputDir = filepath.Dir(trInto)
+		}
+		if err := os.MkdirAll(outputDir, 0755); err != nil {
 			return fmt.Errorf("creating output directory: %w", err)
 		}
 
@@ -88,6 +96,10 @@ Examples:
 		if len(recordings) == 0 {
 			fmt.Fprintln(os.Stderr, "No recordings matched.")
 			return nil
+		}
+
+		if trInto != "" && len(recordings) > 1 {
+			return fmt.Errorf("--into names one file, and this matched %d recordings", len(recordings))
 		}
 
 		pending := plan(recordings)
@@ -153,6 +165,9 @@ func plan(recordings []api.RecordingSimple) []job {
 	var pending []job
 	for _, r := range recordings {
 		dest := filepath.Join(trOutputDir, transcript.BaseName(r.Name, r.StartTime)+transcript.Ext(trFormat))
+		if trInto != "" {
+			dest = trInto
+		}
 		written := false
 		if !trForce {
 			_, err := os.Stat(dest)
@@ -532,6 +547,7 @@ func init() {
 	f.BoolVar(&trAll, "all", false, "every recording in the account")
 	f.BoolVar(&trForce, "force", false, "transcribe the audio again instead of reusing a transcript that exists")
 	f.StringVar(&trOutputDir, "output-dir", ".", "where the transcripts are written")
+	f.StringVar(&trInto, "into", "", "write one recording to exactly this file, refreshing the names when it is there")
 	f.StringVar(&trFormat, "format", "md", "output format: json, txt, srt, md")
 	f.StringVar(&trLanguage, "language", "", "force a language code (e.g. pt, en), empty to detect it")
 	f.StringVar(&trContext, "context", "", "a file describing the recording, or the description itself; settles how names are spelt")
