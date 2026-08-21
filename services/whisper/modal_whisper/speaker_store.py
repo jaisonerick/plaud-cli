@@ -61,15 +61,29 @@ class SpeakerStore:
         self._conn.execute("PRAGMA foreign_keys=ON")
         self._ensure_tables()
         self._ensure_voice_ids()
+        self._keep_older_runs()
+        # After the shape is settled, never before: an index names a column.
+        self._conn.execute(
+            "CREATE INDEX IF NOT EXISTS audio_embeddings_by_recording"
+            " ON audio_embeddings (audio_id, current)"
+        )
+        self._conn.commit()
 
     def _ensure_tables(self):
         self._conn.executescript("""
+            -- A voice is kept for good, and the id is what identifies it. A
+            -- recording separated again leaves the voices of the run before in
+            -- place, marked as no longer current, so a transcript written back
+            -- then goes on saying whose voice it wrote down. What a label means
+            -- is the current run's, and only that: naming SPEAKER_02 has to
+            -- reach the voice a reader is looking at today.
             CREATE TABLE IF NOT EXISTS audio_embeddings (
+                voice_id TEXT PRIMARY KEY,
                 audio_id TEXT NOT NULL,
                 speaker_id TEXT NOT NULL,
                 embedding BLOB NOT NULL,
                 created_at TEXT NOT NULL,
-                PRIMARY KEY (audio_id, speaker_id)
+                current INTEGER NOT NULL DEFAULT 1
             );
 
             -- folded is UNIQUE so that a second spelling of one person cannot
@@ -114,6 +128,38 @@ class SpeakerStore:
                 "UPDATE audio_embeddings SET voice_id = ? WHERE rowid = ?",
                 (_voice_id(row["audio_id"], row["speaker_id"], row["created_at"]), row["rowid"]),
             )
+        self._conn.commit()
+
+    def _keep_older_runs(self):
+        """Move a table that could hold one run per recording to one that holds
+        every run, now that a voice has an id nobody confuses with another.
+
+        The shape before had the label as half the key, so a recording
+        separated again had to have its voices deleted first, and every
+        transcript written from the run before lost the voices it named.
+        """
+        columns = {row["name"] for row in self._conn.execute("PRAGMA table_info(audio_embeddings)")}
+        if "current" in columns:
+            return
+
+        self._conn.executescript("""
+            CREATE TABLE audio_embeddings_kept (
+                voice_id TEXT PRIMARY KEY,
+                audio_id TEXT NOT NULL,
+                speaker_id TEXT NOT NULL,
+                embedding BLOB NOT NULL,
+                created_at TEXT NOT NULL,
+                current INTEGER NOT NULL DEFAULT 1
+            );
+            INSERT INTO audio_embeddings_kept
+                (voice_id, audio_id, speaker_id, embedding, created_at, current)
+                SELECT voice_id, audio_id, speaker_id, embedding, created_at, 1
+                FROM audio_embeddings;
+            DROP TABLE audio_embeddings;
+            ALTER TABLE audio_embeddings_kept RENAME TO audio_embeddings;
+            CREATE INDEX IF NOT EXISTS audio_embeddings_by_recording
+                ON audio_embeddings (audio_id, current);
+        """)
         self._conn.commit()
 
     # -- people ----------------------------------------------------------
@@ -215,24 +261,28 @@ class SpeakerStore:
     def save_audio_embeddings(
         self, audio_id: str, embeddings: dict[str, list[float]]
     ) -> dict[str, str]:
-        """Record the voices a recording was separated into, replacing any before.
+        """Record the voices a recording was separated into.
 
-        Transcribing the same recording again can find a different number of
-        speakers, and a label left over from the run before points at a voice
-        that is no longer there. Naming that label would put a person on
-        somebody else's voice.
+        What came before is kept and marked as no longer current. The voices of
+        an earlier run go on answering to their ids, which is how a transcript
+        written back then still says whose voice it wrote down; what a label
+        means is the current run's alone, because naming SPEAKER_02 has to
+        reach the voice whoever is naming it is looking at.
 
         Returns the id given to each label, which is what a transcript carries
         so that it can still say whose voice it wrote down.
         """
         now = datetime.now(timezone.utc).isoformat()
         voice_ids = {label: _voice_id(audio_id, label, now) for label in embeddings}
-        self._conn.execute("DELETE FROM audio_embeddings WHERE audio_id = ?", (audio_id,))
+        self._conn.execute(
+            "UPDATE audio_embeddings SET current = 0 WHERE audio_id = ?", (audio_id,)
+        )
         self._conn.executemany(
-            "INSERT INTO audio_embeddings (audio_id, speaker_id, embedding, created_at, voice_id)"
-            " VALUES (?, ?, ?, ?, ?)",
+            "INSERT OR REPLACE INTO audio_embeddings"
+            " (voice_id, audio_id, speaker_id, embedding, created_at, current)"
+            " VALUES (?, ?, ?, ?, ?, 1)",
             [
-                (audio_id, label, _pack(vec), now, voice_ids[label])
+                (voice_ids[label], audio_id, label, _pack(vec), now)
                 for label, vec in embeddings.items()
             ],
         )
@@ -258,7 +308,7 @@ class SpeakerStore:
             if row is None:
                 row = self._conn.execute(
                     "SELECT voice_id, embedding FROM audio_embeddings"
-                    " WHERE audio_id = ? AND speaker_id = ?",
+                    " WHERE audio_id = ? AND speaker_id = ? AND current = 1",
                     (audio_id, key),
                 ).fetchone()
             if row is not None:
@@ -266,15 +316,18 @@ class SpeakerStore:
         return found
 
     def get_audio_embeddings(self, audio_id: str) -> dict[str, list[float]]:
+        """The voices of the run that stands, which is what a label names."""
         rows = self._conn.execute(
-            "SELECT speaker_id, embedding FROM audio_embeddings WHERE audio_id = ?",
+            "SELECT speaker_id, embedding FROM audio_embeddings"
+            " WHERE audio_id = ? AND current = 1",
             (audio_id,),
         ).fetchall()
         return {row["speaker_id"]: _unpack(row["embedding"]) for row in rows}
 
     def get_audio_speaker_info(self, audio_id: str, speaker_id: str) -> list[float] | None:
         row = self._conn.execute(
-            "SELECT embedding FROM audio_embeddings WHERE audio_id = ? AND speaker_id = ?",
+            "SELECT embedding FROM audio_embeddings"
+            " WHERE audio_id = ? AND speaker_id = ? AND current = 1",
             (audio_id, speaker_id),
         ).fetchone()
         return _unpack(row["embedding"]) if row else None

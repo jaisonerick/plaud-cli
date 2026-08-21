@@ -175,15 +175,31 @@ def test_a_voice_is_found_by_its_id_and_by_its_label(store):
     assert by_label["SPEAKER_00"][0] == ids["SPEAKER_00"]
 
 
-# The point of the id: separating a recording again renumbers the labels, and a
-# transcript from before then asks about a voice that is gone. Finding nothing
-# is the honest answer; finding whoever holds SPEAKER_00 now is not.
-def test_an_id_from_a_run_that_was_replaced_finds_nothing(store):
+# The point of the id: a recording separated again renumbers its labels, so
+# what a label means is the current run's. The voices of the run before are
+# kept, because a transcript written back then names them by id.
+def test_a_voice_from_an_earlier_run_still_answers_to_its_id(store):
     first = store.save_audio_embeddings("rec-1", {"SPEAKER_00": [0.1] * 4})
     store.save_audio_embeddings("rec-1", {"SPEAKER_00": [0.9] * 4})
 
-    assert store.voices_of("rec-1", [first["SPEAKER_00"]]) == {}
+    found = store.voices_of("rec-1", [first["SPEAKER_00"]])
+
+    assert found[first["SPEAKER_00"]][1] == pytest.approx([0.1] * 4)
+
+
+def test_a_label_means_the_run_that_stands(store):
+    store.save_audio_embeddings("rec-1", {"SPEAKER_00": [0.1] * 4})
+    store.save_audio_embeddings("rec-1", {"SPEAKER_00": [0.9] * 4})
+
     assert store.voices_of("rec-1", ["SPEAKER_00"])["SPEAKER_00"][1] == pytest.approx([0.9] * 4)
+    assert store.get_audio_speaker_info("rec-1", "SPEAKER_00") == pytest.approx([0.9] * 4)
+
+
+def test_a_recording_lists_only_the_voices_of_the_run_that_stands(store):
+    store.save_audio_embeddings("rec-1", {"SPEAKER_00": [0.1] * 4, "SPEAKER_01": [0.2] * 4})
+    store.save_audio_embeddings("rec-1", {"SPEAKER_00": [0.9] * 4})
+
+    assert sorted(store.get_audio_embeddings("rec-1")) == ["SPEAKER_00"]
 
 
 def test_the_id_of_a_voice_does_not_depend_on_who_works_it_out(tmp_path):

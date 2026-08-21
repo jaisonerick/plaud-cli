@@ -35,7 +35,7 @@ func WriteVoices(content string, voices VoiceBlock) string {
 	block := renderVoices(voices)
 	if found := frontMatter.FindStringSubmatchIndex(content); found != nil {
 		inner := content[found[2]:found[3]]
-		return "---\n" + stripVoices(inner) + block + "\n---\n" + content[found[1]:]
+		return "---\n" + stripVoices(inner) + block + "---\n" + content[found[1]:]
 	}
 	return "---\n" + block + "---\n\n" + content
 }

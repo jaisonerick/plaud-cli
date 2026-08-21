@@ -42,6 +42,14 @@ func TestVoicesGoUnderFrontMatterAlreadyThere(t *testing.T) {
 	}
 }
 
+func TestTheBlockLeavesNoBlankLineBehindIt(t *testing.T) {
+	written := WriteVoices(WriteVoices(plain, VoiceBlock{"SPEAKER_02": {"v_1"}}), VoiceBlock{"Paulo Ionescu (CERC)": {"v_1"}})
+
+	if strings.Contains(written, "\n\n---\n") {
+		t.Errorf("the front matter gained a blank line:\n%s", written)
+	}
+}
+
 func TestWritingVoicesAgainReplacesTheBlock(t *testing.T) {
 	once := WriteVoices(plain, VoiceBlock{"SPEAKER_02": {"v_91bc04"}})
 	twice := WriteVoices(once, VoiceBlock{"Paulo Ionescu (CERC)": {"v_91bc04"}})
