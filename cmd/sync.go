@@ -19,7 +19,7 @@ var (
 	syncContextFile string
 	syncLanguage    string
 	syncFormat      string
-	syncRefresh     bool
+	syncOnlyNew     bool
 	syncDryRun      bool
 )
 
@@ -33,9 +33,14 @@ so 'plaud sync --profile cerc' is the whole instruction. Filters work too, and
 stand in for a profile in a repository that declares none.
 
 What says a recording is already here is the file: the destination is worked
-out from the same rules that wrote it, so running this twice fetches nothing
-the second time. --refresh also settles the names in the files already here,
-which costs a request each and is worth it after naming somebody.
+out from the same rules that wrote it, so running this twice decodes nothing
+the second time.
+
+A transcript already here is not left alone, though. Who a voice belongs to is
+settled by the people known today, and somebody named since the file was
+written is still SPEAKER_02 in it. Every transcript this brings in range of is
+asked about again, and the ones that changed name are named in the output.
+--only-new skips that.
 
 Recordings carrying an excluded tag are left alone.
 
@@ -43,7 +48,7 @@ Examples:
   plaud sync --profile cerc
   plaud sync --profile cerc --dry-run
   plaud sync --tag CERC --since 2026-08-01
-  plaud sync --profile cerc --refresh`,
+  plaud sync --profile cerc --only-new`,
 	Args: cobra.NoArgs,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		ctx := cmd.Context()
@@ -65,42 +70,65 @@ Examples:
 		if err != nil {
 			return err
 		}
-		wanted, err := e.missing(ctx, recordings)
+		if len(recordings) == 0 {
+			fmt.Fprintln(os.Stderr, "No recordings matched.")
+			return nil
+		}
+		work, err := e.plan(ctx, recordings)
 		if err != nil {
 			return err
 		}
-
-		switch {
-		case len(recordings) == 0:
-			fmt.Fprintln(os.Stderr, "No recordings matched.")
-			return nil
-		case len(wanted) == 0:
-			fmt.Fprintf(os.Stderr, "Nothing to bring in: all %d recording(s) that matched are already here.\n", len(recordings))
+		if len(work.fetch)+len(work.settle) == 0 {
+			fmt.Fprintf(os.Stderr, "Nothing to do: all %d recording(s) that matched are out of scope here.\n", len(recordings))
 			return nil
 		}
 		if syncDryRun {
-			fmt.Fprintf(os.Stderr, "%d of %d recording(s) would be brought in:\n", len(wanted), len(recordings))
-			for _, r := range wanted {
-				fmt.Fprintf(os.Stderr, "  %s  %s  %s\n", r.ID, api.FormatEpochMs(r.StartTime), r.Name)
-			}
-			return nil
+			return work.describe(e.repo)
 		}
 
 		whisper, err := whisperClient()
 		if err != nil {
 			return err
 		}
+		fmt.Fprintf(os.Stderr, "%d recording(s) to bring in, %d already here to settle the names in.\n",
+			len(work.fetch), len(work.settle))
 
-		fmt.Fprintf(os.Stderr, "Bringing in %d of %d recording(s).\n", len(wanted), len(recordings))
-		var failed int
-		for _, r := range wanted {
-			fmt.Fprintf(os.Stderr, "\n%s\n", r.Name)
-			if _, _, err := e.run(ctx, whisper, r); err != nil {
+		var written, failed int
+		var renamed []report
+		bring := func(r api.RecordingSimple, announce bool) {
+			if announce {
+				fmt.Fprintf(os.Stderr, "\n%s\n", r.Name)
+			}
+			done, err := e.run(ctx, whisper, r)
+			if err != nil {
 				fmt.Fprintf(os.Stderr, "Error on %s: %v\n", r.Name, err)
 				failed++
+				return
+			}
+			if jsonOut {
+				printReport(done)
+			}
+			if done.Written {
+				written++
+			}
+			if done.Renamed > 0 {
+				renamed = append(renamed, done)
 			}
 		}
-		fmt.Fprintf(os.Stderr, "\n%d brought in, %d failed\n", len(wanted)-failed, failed)
+		for _, r := range work.fetch {
+			bring(r, true)
+		}
+		for _, r := range work.settle {
+			bring(r, false)
+		}
+
+		fmt.Fprintf(os.Stderr, "\n%d brought in, %d failed\n", written, failed)
+		if len(renamed) > 0 {
+			fmt.Fprintf(os.Stderr, "\n%d transcript(s) already here now name somebody they did not:\n", len(renamed))
+			for _, done := range renamed {
+				fmt.Fprintf(os.Stderr, "  %s  (%d turn(s))\n", e.repo.Rel(done.Path), done.Renamed)
+			}
+		}
 		if failed > 0 {
 			return fmt.Errorf("%d recording(s) failed", failed)
 		}
@@ -108,31 +136,58 @@ Examples:
 	},
 }
 
-// missing keeps the recordings this repository does not have, which is what
-// makes running this twice fetch nothing the second time. A recording ruled
-// out by tag is left alone whatever the filter said.
-func (e *errand) missing(ctx context.Context, recordings []api.RecordingSimple) ([]api.RecordingSimple, error) {
+// work is what a sync has ahead of it: the recordings to bring in, and the
+// transcripts already here whose names are worth settling again.
+type work struct {
+	fetch  []api.RecordingSimple
+	settle []api.RecordingSimple
+	at     map[string]string
+}
+
+// plan sorts the recordings a filter kept into those two, and drops whatever
+// a tag rules out of this repository whatever the filter said.
+func (e *errand) plan(ctx context.Context, recordings []api.RecordingSimple) (work, error) {
 	excluded := map[string]bool{}
 	for _, name := range e.repo.ExcludeTags {
 		excluded[strings.ToLower(name)] = true
 	}
 	byID, _ := tagNames(ctx)
 
-	var wanted []api.RecordingSimple
+	planned := work{at: map[string]string{}}
 	for _, r := range recordings {
 		if outOfScope(r, byID, excluded) {
 			continue
 		}
 		dest, err := e.destination(r)
 		if err != nil {
-			return nil, err
+			return work{}, err
 		}
-		if _, err := os.Stat(dest); err == nil && !syncRefresh {
+		planned.at[r.ID] = dest
+
+		if _, err := os.Stat(dest); err != nil {
+			planned.fetch = append(planned.fetch, r)
 			continue
 		}
-		wanted = append(wanted, r)
+		if !syncOnlyNew {
+			planned.settle = append(planned.settle, r)
+		}
 	}
-	return wanted, nil
+	return planned, nil
+}
+
+// describe says what a run would do, and stops.
+func (w work) describe(r *repo.Config) error {
+	fmt.Fprintf(os.Stderr, "%d recording(s) would be brought in:\n", len(w.fetch))
+	for _, rec := range w.fetch {
+		fmt.Fprintf(os.Stderr, "  %s  %s  %s\n", rec.ID, api.FormatEpochMs(rec.StartTime), rec.Name)
+	}
+	if len(w.settle) > 0 {
+		fmt.Fprintf(os.Stderr, "\n%d transcript(s) already here would have their names settled again:\n", len(w.settle))
+		for _, rec := range w.settle {
+			fmt.Fprintf(os.Stderr, "  %s\n", r.Rel(w.at[rec.ID]))
+		}
+	}
+	return nil
 }
 
 func outOfScope(r api.RecordingSimple, byID map[string]string, excluded map[string]bool) bool {
@@ -153,7 +208,7 @@ func init() {
 	f.StringVar(&syncContextFile, "context-file", "", "a file describing them, standing in for the repository's document")
 	f.StringVar(&syncLanguage, "language", "", "settle the language (e.g. pt)")
 	f.StringVar(&syncFormat, "format", "md", "output format: json, txt, srt, md")
-	f.BoolVar(&syncRefresh, "refresh", false, "also settle the names in the transcripts already here")
+	f.BoolVar(&syncOnlyNew, "only-new", false, "leave the transcripts already here alone")
 	f.BoolVar(&syncDryRun, "dry-run", false, "say what would be brought in, and stop")
 	rootCmd.AddCommand(syncCmd)
 }

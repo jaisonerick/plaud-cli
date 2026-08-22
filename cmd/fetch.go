@@ -73,29 +73,19 @@ Examples:
 			return err
 		}
 
-		one := report{Recording: recording.ID}
-		if jsonOut {
-			held = &one
-			defer func() { held = nil }()
-		}
-
-		dest, summary, err := e.run(ctx, whisper, recording)
+		done, err := e.run(ctx, whisper, recording)
 		if err != nil {
 			return err
 		}
 
 		if jsonOut {
-			one.Recording = recording.ID
-			one.Path = dest
-			one.Summary = summary
-			one.Filing = e.repo.Filing
-			printReport(one)
+			printReport(done)
 			return nil
 		}
 
-		fmt.Printf("transcript: %s\n", e.repo.Rel(dest))
-		if summary != "" {
-			fmt.Printf("summary:    %s\n", e.repo.Rel(summary))
+		fmt.Printf("transcript: %s\n", e.repo.Rel(done.Path))
+		if done.Summary != "" {
+			fmt.Printf("summary:    %s\n", e.repo.Rel(done.Summary))
 		}
 		if e.repo.Filing != "" {
 			fmt.Printf("\nWhere this belongs in this repository: %s\n", e.repo.Filing)
@@ -132,8 +122,9 @@ func newErrand(profileName, text, file, format, language string, force bool) (*e
 		return nil, err
 	}
 
-	// Before anything is fetched: a description that cannot be read is worth
-	// saying so about while it still costs nothing.
+	// Read now, so a description naming a file nobody wrote is caught while it
+	// still costs nothing. Whether one is needed at all is settled per
+	// recording: a run that only brings names up to date decodes nothing.
 	description, err := describe(r, profile, text, file)
 	if err != nil {
 		return nil, err
@@ -152,26 +143,46 @@ func newErrand(profileName, text, file, format, language string, force bool) (*e
 	}, nil
 }
 
-func (e *errand) run(ctx context.Context, whisper *modal.HTTPClient, recording api.RecordingSimple) (dest, summary string, err error) {
-	dest, err = e.destination(recording)
+// run brings one recording in, and answers with what happened to it: whether
+// the transcript was written or was already here, and how many turns changed
+// name because a voice is known better today than when the file was written.
+func (e *errand) run(ctx context.Context, whisper *modal.HTTPClient, recording api.RecordingSimple) (report, error) {
+	dest, err := e.destination(recording)
 	if err != nil {
-		return "", "", err
+		return report{}, err
 	}
 	if err := os.MkdirAll(filepath.Dir(dest), 0755); err != nil {
-		return "", "", fmt.Errorf("creating %s: %w", filepath.Dir(dest), err)
+		return report{}, fmt.Errorf("creating %s: %w", filepath.Dir(dest), err)
 	}
 
-	if err := newJob(recording, dest, e.how, true).run(ctx, whisper); err != nil {
-		return "", "", err
+	writing := newJob(recording, dest, e.how, true)
+	if !writing.written && e.description == "" {
+		return report{}, fmt.Errorf("%s", noDescription)
+	}
+
+	// The job answers for the transcript itself; this answers for the errand,
+	// so the two are one object rather than two.
+	var done report
+	outer := held
+	held = &done
+	defer func() { held = outer }()
+
+	if err := writing.run(ctx, whisper); err != nil {
+		return report{}, err
 	}
 	if err := e.stamp(dest, recording); err != nil {
-		return "", "", err
+		return report{}, err
 	}
-	summary, err = e.fetchSummary(ctx, dest, recording)
+	summary, err := e.fetchSummary(ctx, dest, recording)
 	if err != nil {
-		return "", "", err
+		return report{}, err
 	}
-	return dest, summary, e.record(recording, dest, summary)
+
+	done.Recording = recording.ID
+	done.Path = dest
+	done.Summary = summary
+	done.Filing = e.repo.Filing
+	return done, e.record(recording, dest, summary)
 }
 
 // destination is the file this transcript belongs in: what a caller named, or
@@ -225,7 +236,7 @@ func describe(r *repo.Config, p repo.Profile, text, file string) (string, error)
 		document = first(r.Abs(p.Context), r.Context)
 	}
 	if document == "" && text == "" {
-		return "", fmt.Errorf("%s", noDescription)
+		return "", nil
 	}
 
 	var written string
@@ -294,6 +305,10 @@ func (e *errand) fetchSummary(ctx context.Context, dest string, recording api.Re
 	default:
 		ext := filepath.Ext(dest)
 		target = strings.TrimSuffix(dest, ext) + "-summary" + ext
+	}
+
+	if _, err := os.Stat(target); err == nil && !e.how.force {
+		return target, nil
 	}
 
 	detail, err := client.GetDetail(ctx, recording.ID)

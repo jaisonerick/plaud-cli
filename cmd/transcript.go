@@ -257,16 +257,6 @@ func (j job) run(ctx context.Context, whisper *modal.HTTPClient) error {
 	if j.written {
 		return j.refreshNames(ctx, whisper)
 	}
-	if !j.how.force && j.recording.HasTranscript {
-		written, err := j.fromRecord(ctx)
-		if err != nil {
-			return err
-		}
-		if written {
-			fmt.Fprintf(os.Stderr, "Saved to %s\n", j.dest)
-			return nil
-		}
-	}
 	return j.fromAudio(ctx, whisper)
 }
 
@@ -417,29 +407,6 @@ func agreedName(ids []string, names map[string]string) (name string, split bool)
 		name = settled
 	}
 	return name, false
-}
-
-// fromRecord writes the transcript already on record. It reports whether it
-// found one: an account can claim a transcript and serve no link to it.
-func (j job) fromRecord(ctx context.Context) (bool, error) {
-	detail, err := client.GetDetail(ctx, j.recording.ID)
-	if err != nil {
-		return false, fmt.Errorf("fetching recording details: %w", err)
-	}
-	url := detail.TranscriptURL()
-	if url == "" {
-		return false, nil
-	}
-
-	data, err := client.FetchGzipped(ctx, url)
-	if err != nil {
-		return false, fmt.Errorf("downloading transcript: %w", err)
-	}
-	segments, err := transcript.Parse(data)
-	if err != nil {
-		return false, fmt.Errorf("parsing transcript: %w", err)
-	}
-	return true, saveTranscript(segments, j.how.format, j.dest)
 }
 
 func (j job) fromAudio(ctx context.Context, whisper *modal.HTTPClient) error {

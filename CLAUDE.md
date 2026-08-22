@@ -105,7 +105,9 @@ The description is composed rather than chosen. The repository's document holds 
 
 `transcript` falls back to the repository's document when neither flag is passed, and a run that only settles the names in files already on disk needs no description at all, because it decodes nothing.
 
-`plaud sync` does the same errand for every recording a tag selects, and a profile names both the tag and where those recordings are filed, so `--profile cerc` is the whole instruction. What says a recording is already here is the file at the destination the same rules produce, which is why running it twice fetches nothing the second time. `--refresh` also settles the names in what is already there, at a request each.
+`plaud sync` does the same errand for every recording a tag selects, and a profile names both the tag and where those recordings are filed, so `--profile cerc` is the whole instruction. What says a recording is already here is the file at the destination the same rules produce, which is why running it twice decodes nothing.
+
+A transcript already here is not left alone. Who a voice belongs to is settled by the people known today, so somebody named since the file was written is still SPEAKER_02 in it, and a sync that only fetched what was missing would leave that standing. Every transcript in range is asked about again, and the ones whose turns changed name are listed at the end of the run: a rename nobody is told about is a file that quietly stopped matching the transcript beside it. `--only-new` skips that half.
 
 ## The Catalog
 
@@ -117,7 +119,7 @@ There is no index to build. The catalog is read whole and filtered in `catalog l
 
 ## Transcription
 
-`transcript` is the one way to get the text of a recording. **A transcription is made once.** The service keeps what it decoded, and a recording that has been through it comes back in seconds rather than through a GPU; `--force` is what decodes it again, and it is the one thing about a transcription only a caller can decide, because only a caller knows the transcript on record is one to throw away.
+`transcript` is the one way to get the text of a recording, and the transcription service is the one place it comes from. Plaud's own transcript is never used, even where the account has one: it carries no voice, so a file written from it could never have a name corrected, and every recording taken that way would sit outside speaker recognition forever. **A transcription is made once.** The service keeps what it decoded, and a recording that has been through it comes back in seconds rather than through a GPU; `--force` is what decodes it again, and it is the one thing about a transcription only a caller can decide, because only a caller knows the transcript on record is one to throw away.
 
 Deciding otherwise costs more than the minutes. Transcribing again separates the voices afresh, so the labels are renumbered and every transcript written from the run before points at voices that no longer exist.
 
