@@ -1,184 +1,220 @@
 package identify
 
-const pageHTML = `<!DOCTYPE html>
-<html lang="en">
+// pageHTML is the page somebody names voices on. It saves each name as it is
+// entered rather than at the end, so a tab closed halfway leaves the work done
+// so far done.
+const pageHTML = `<!doctype html>
+<html lang="pt-BR">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Identify Speakers</title>
+<title>Quem está falando</title>
 <style>
+  :root {
+    --bg: #f6f6f5; --card: #fff; --ink: #1a1a1a; --muted: #6b6b6b;
+    --line: #e5e5e3; --accent: #2563eb; --ok: #15803d; --bad: #b91c1c;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #16161a; --card: #1f1f24; --ink: #ececed; --muted: #9b9ba1;
+      --line: #303038; --accent: #6ea8ff; --ok: #4ade80; --bad: #f87171;
+    }
+  }
   *, *::before, *::after { box-sizing: border-box; }
   body {
     font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
-    background: #f5f5f5; color: #1a1a1a;
-    max-width: 720px; margin: 0 auto; padding: 2rem 1rem;
-    line-height: 1.5;
+    background: var(--bg); color: var(--ink); line-height: 1.5;
+    max-width: 780px; margin: 0 auto; padding: 2rem 1rem 5rem;
   }
-  h1 { font-size: 1.5rem; margin-bottom: 0.25rem; }
-  .subtitle { color: #666; margin-bottom: 2rem; }
-  .speaker-card {
-    background: #fff; border-radius: 8px; padding: 1.25rem;
-    margin-bottom: 1.25rem; box-shadow: 0 1px 3px rgba(0,0,0,0.1);
-  }
-  .speaker-card h2 {
-    font-size: 1rem; margin: 0 0 0.75rem;
-    color: #444; font-weight: 600;
-  }
-  .sample {
-    display: flex; align-items: flex-start; gap: 0.75rem;
-    padding: 0.5rem 0; border-bottom: 1px solid #eee;
-  }
-  .sample:last-of-type { border-bottom: none; }
-  .play-btn {
-    flex-shrink: 0; width: 36px; height: 36px;
-    border: none; border-radius: 50%; cursor: pointer;
-    background: #2563eb; color: #fff; font-size: 0.85rem;
-    display: flex; align-items: center; justify-content: center;
-    transition: background 0.15s;
-  }
-  .play-btn:hover { background: #1d4ed8; }
-  .play-btn.playing { background: #dc2626; }
-  .sample-text {
-    font-size: 0.9rem; color: #333;
-    flex: 1; padding-top: 0.35rem;
-  }
-  .sample-time {
-    font-size: 0.75rem; color: #999; margin-top: 0.15rem;
-  }
-  .name-row {
-    margin-top: 0.75rem; display: flex; gap: 0.5rem; align-items: center;
-  }
-  .name-row label { font-size: 0.85rem; color: #666; white-space: nowrap; }
-  .name-row input {
-    flex: 1; padding: 0.5rem 0.75rem; border: 1px solid #ddd;
-    border-radius: 6px; font-size: 0.9rem; outline: none;
-    transition: border-color 0.15s;
-  }
-  .name-row input:focus { border-color: #2563eb; }
-  .actions {
-    display: flex; gap: 0.75rem; margin-top: 1.5rem;
-  }
-  .btn {
-    padding: 0.6rem 1.5rem; border: none; border-radius: 6px;
-    font-size: 0.9rem; font-weight: 500; cursor: pointer;
-    transition: background 0.15s;
-  }
-  .btn-primary { background: #2563eb; color: #fff; }
-  .btn-primary:hover { background: #1d4ed8; }
-  .btn-primary:disabled { background: #93c5fd; cursor: not-allowed; }
-  .btn-secondary { background: #e5e7eb; color: #333; }
-  .btn-secondary:hover { background: #d1d5db; }
-  .done-msg {
-    text-align: center; padding: 3rem 1rem;
-  }
-  .done-msg h2 { color: #16a34a; margin-bottom: 0.5rem; }
-  .done-msg p { color: #666; }
+  h1 { font-size: 1.35rem; margin: 0 0 .25rem; }
+  .lede { color: var(--muted); margin: 0 0 1.75rem; }
+  .group { margin: 0 0 .5rem; font-size: .8rem; color: var(--muted);
+           text-transform: uppercase; letter-spacing: .04em; }
+  .card { background: var(--card); border: 1px solid var(--line); border-radius: 10px;
+          padding: 1.1rem 1.15rem; margin: 0 0 1rem; }
+  .card.done { opacity: .55; }
+  .who { display: flex; align-items: baseline; gap: .6rem; margin-bottom: .8rem; }
+  .who b { font-size: 1rem; }
+  .who span { color: var(--muted); font-size: .8rem; }
+  .sample { display: flex; gap: .7rem; align-items: flex-start;
+            padding: .45rem 0; border-top: 1px solid var(--line); }
+  .sample:first-of-type { border-top: none; }
+  .play { flex: 0 0 auto; width: 34px; height: 34px; border: none; border-radius: 50%;
+          background: var(--accent); color: #fff; cursor: pointer; font-size: .8rem; }
+  .play.on { background: var(--bad); }
+  .said { font-size: .88rem; }
+  .at { color: var(--muted); font-size: .74rem; }
+  .row { display: flex; gap: .5rem; margin-top: .9rem; flex-wrap: wrap; }
+  input[type=text] { flex: 1 1 12rem; min-width: 0; padding: .5rem .7rem; font-size: .9rem;
+         border: 1px solid var(--line); border-radius: 7px;
+         background: var(--bg); color: var(--ink); }
+  input:focus { outline: 2px solid var(--accent); outline-offset: -1px; }
+  button.save { padding: .5rem 1rem; border: none; border-radius: 7px; cursor: pointer;
+                background: var(--accent); color: #fff; font-size: .9rem; }
+  button.save:disabled { opacity: .5; cursor: default; }
+  .aside { display: flex; align-items: center; gap: .35rem; color: var(--muted); font-size: .82rem; }
+  .said-back { margin-top: .6rem; font-size: .85rem; }
+  .said-back.ok { color: var(--ok); }
+  .said-back.bad { color: var(--bad); }
+  footer { position: fixed; left: 0; right: 0; bottom: 0; background: var(--card);
+           border-top: 1px solid var(--line); padding: .7rem 1rem; text-align: center; }
+  footer button { padding: .5rem 1.2rem; border: 1px solid var(--line); border-radius: 7px;
+                  background: transparent; color: var(--ink); cursor: pointer; font-size: .9rem; }
+  .count { color: var(--muted); font-size: .85rem; margin-right: .8rem; }
 </style>
 </head>
 <body>
+<h1>Quem está falando</h1>
+<p class="lede">Ouça, escreva quem é, e salve. Cada nome é guardado na hora, e vale para
+todas as transcrições em que essa voz aparecer. Deixe em branco o que você não souber.</p>
 
-<div id="app">
-  <h1>Identify Speakers</h1>
-  <p class="subtitle">Play audio samples to identify each speaker, then assign names below.</p>
+<div id="list"></div>
+<datalist id="known"></datalist>
 
-  <form id="form">
-    {{range .Speakers}}
-    <div class="speaker-card">
-      <h2>{{.ID}}</h2>
-      {{range .Samples}}
-      <div class="sample">
-        <button type="button" class="play-btn" data-start="{{.StartSec}}" data-end="{{.EndSec}}">&#9654;</button>
-        <div>
-          <div class="sample-text">"{{.Text}}"</div>
-          <div class="sample-time">{{printf "%.1f" .StartSec}}s – {{printf "%.1f" .EndSec}}s</div>
-        </div>
-      </div>
-      {{end}}
-      <div class="name-row">
-        <label>Name:</label>
-        <input type="text" name="{{.ID}}" placeholder="Enter name for {{.ID}}…" autocomplete="off">
-      </div>
-    </div>
-    {{end}}
-
-    <div class="actions">
-      <button type="submit" class="btn btn-primary" id="save-btn">Save Names</button>
-      <button type="button" class="btn btn-secondary" id="skip-btn">Skip</button>
-    </div>
-  </form>
-</div>
+<footer>
+  <span class="count" id="count"></span>
+  <button onclick="finish()">Terminei</button>
+</footer>
 
 <script>
-(function() {
-  const audio = new Audio('/audio');
-  let stopTimer = null;
-  let activeBtn = null;
+const VOICES = {{.VoicesJSON}};
+const KNOWN = {{.KnownJSON}};
 
-  function stopPlayback() {
-    audio.pause();
-    if (stopTimer) { clearTimeout(stopTimer); stopTimer = null; }
-    if (activeBtn) { activeBtn.classList.remove('playing'); activeBtn.innerHTML = '\u25B6'; activeBtn = null; }
+const players = {};
+let playing = null;
+let named = 0;
+
+document.getElementById("known").innerHTML =
+  KNOWN.map(n => '<option value="' + esc(n) + '">').join("");
+
+function esc(s) {
+  return String(s).replace(/[&<>"']/g, c =>
+    ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+}
+
+function clock(sec) {
+  const s = Math.floor(sec);
+  return String(Math.floor(s / 60)).padStart(2, "0") + ":" + String(s % 60).padStart(2, "0");
+}
+
+function render() {
+  const list = document.getElementById("list");
+  let html = "", lastFile = null;
+
+  VOICES.forEach((v, i) => {
+    if (v.file !== lastFile) {
+      lastFile = v.file;
+      html += '<p class="group">' + esc(v.title || v.file.split("/").pop()) + "</p>";
+    }
+    html += '<div class="card" id="card-' + i + '">' +
+      '<div class="who"><b>' + esc(v.label) + "</b><span>" + esc(v.id) + "</span></div>";
+
+    v.samples.forEach((s, j) => {
+      html += '<div class="sample">' +
+        '<button class="play" id="play-' + i + "-" + j + '" onclick="hear(' + i + "," + j + ')">▶</button>' +
+        '<div><div class="said">' + esc(s.text || "(sem texto)") + "</div>" +
+        '<div class="at">' + clock(s.start_sec) + " – " + clock(s.end_sec) + "</div></div></div>";
+    });
+
+    html += '<div class="row">' +
+      '<input type="text" id="name-' + i + '" list="known" placeholder="Nome Sobrenome (Empresa)" ' +
+      'onkeydown="if(event.key===\'Enter\')save(' + i + ')">' +
+      '<button class="save" id="save-' + i + '" onclick="save(' + i + ')">Salvar</button></div>' +
+      '<div class="row"><label class="aside">' +
+      '<input type="checkbox" id="nosurname-' + i + '"> sobrenome desconhecido</label></div>' +
+      '<div class="said-back" id="back-' + i + '"></div></div>';
+  });
+
+  list.innerHTML = html;
+  tally();
+}
+
+function tally() {
+  document.getElementById("count").textContent = named + " de " + VOICES.length + " nomeadas";
+}
+
+function hear(i, j) {
+  const v = VOICES[i], s = v.samples[j];
+  const button = document.getElementById("play-" + i + "-" + j);
+
+  if (playing) {
+    playing.audio.pause();
+    document.getElementById(playing.button).classList.remove("on");
+    const same = playing.button === button.id;
+    playing = null;
+    if (same) return;
   }
 
-  document.querySelectorAll('.play-btn').forEach(function(btn) {
-    btn.addEventListener('click', function() {
-      if (activeBtn === btn) { stopPlayback(); return; }
-      stopPlayback();
+  if (!players[v.recording]) {
+    players[v.recording] = new Audio("/audio/" + encodeURIComponent(v.recording));
+  }
+  const audio = players[v.recording];
+  audio.currentTime = s.start_sec;
+  audio.play();
+  button.classList.add("on");
+  playing = { audio, button: button.id };
 
-      activeBtn = btn;
-      btn.classList.add('playing');
-      btn.innerHTML = '\u25A0';
-
-      var start = parseFloat(btn.dataset.start);
-      var end = parseFloat(btn.dataset.end);
-      audio.currentTime = start;
-      audio.play();
-      stopTimer = setTimeout(stopPlayback, (end - start) * 1000);
-    });
-  });
-
-  audio.addEventListener('ended', stopPlayback);
-
-  document.getElementById('form').addEventListener('submit', function(e) {
-    e.preventDefault();
-    stopPlayback();
-
-    var names = {};
-    document.querySelectorAll('.name-row input').forEach(function(input) {
-      var v = input.value.trim();
-      if (v) names[input.name] = v;
-    });
-
-    if (Object.keys(names).length === 0) {
-      alert('Please enter at least one speaker name.');
-      return;
+  const stop = () => {
+    if (audio.currentTime >= s.end_sec) {
+      audio.pause();
+      button.classList.remove("on");
+      audio.removeEventListener("timeupdate", stop);
+      playing = null;
     }
+  };
+  audio.addEventListener("timeupdate", stop);
+}
 
-    var btn = document.getElementById('save-btn');
-    btn.disabled = true;
-    btn.textContent = 'Saving…';
+async function save(i) {
+  const typed = document.getElementById("name-" + i).value.trim();
+  const back = document.getElementById("back-" + i);
+  if (!typed) { back.className = "said-back bad"; back.textContent = "Escreva o nome primeiro."; return; }
 
-    fetch('/save', {
-      method: 'POST',
-      headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify(names)
-    }).then(function() {
-      document.getElementById('app').innerHTML =
-        '<div class="done-msg"><h2>Names submitted</h2>' +
-        '<p>Check your terminal for confirmation. You can close this tab.</p></div>';
-    });
+  const match = typed.match(/^(.*?)\s*\(([^)]+)\)\s*$/);
+  if (!match) {
+    back.className = "said-back bad";
+    back.textContent = "Escreva como \"Nome Sobrenome (Empresa)\" — a empresa é obrigatória.";
+    return;
+  }
+
+  const button = document.getElementById("save-" + i);
+  button.disabled = true;
+  back.className = "said-back";
+  back.textContent = "Salvando…";
+
+  const answer = await fetch("/name", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      index: i,
+      name: match[1].trim(),
+      company: match[2].trim(),
+      surname_unknown: document.getElementById("nosurname-" + i).checked,
+    }),
+  }).then(r => r.json()).catch(e => ({ error: String(e) }));
+
+  if (answer.error) {
+    back.className = "said-back bad";
+    back.textContent = answer.error;
+    button.disabled = false;
+    return;
+  }
+
+  back.className = "said-back ok";
+  back.textContent = "É " + answer.named + ".";
+  document.getElementById("card-" + i).classList.add("done");
+  named++;
+  tally();
+}
+
+function finish() {
+  fetch("/done", { method: "POST" }).then(() => {
+    document.body.innerHTML =
+      "<h1>Pronto</h1><p class=\"lede\">" + named + " voz(es) nomeada(s). Pode fechar esta aba.</p>";
   });
+}
 
-  document.getElementById('skip-btn').addEventListener('click', function() {
-    stopPlayback();
-    fetch('/skip', {method: 'POST'}).then(function() {
-      document.getElementById('app').innerHTML =
-        '<div class="done-msg"><h2>Skipped</h2>' +
-        '<p>No changes made. You can close this tab.</p></div>';
-    });
-  });
-})();
+render();
 </script>
-
 </body>
 </html>`

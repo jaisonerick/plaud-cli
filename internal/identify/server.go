@@ -8,170 +8,170 @@ import (
 	"html/template"
 	"net"
 	"net/http"
-	"sort"
+	"sync"
 	"time"
 
 	"github.com/jaisonerick/plaud-cli/internal/browser"
-	"github.com/jaisonerick/plaud-cli/internal/transcript"
 )
 
-const maxSamples = 3
-
-// SpeakerSample holds a representative audio excerpt for a speaker.
-type SpeakerSample struct {
-	StartSec float64 `json:"start_sec"`
-	EndSec   float64 `json:"end_sec"`
-	Text     string  `json:"text"`
-}
-
-// SpeakerInfo groups samples for a single unresolved speaker.
-type SpeakerInfo struct {
-	ID      string          `json:"id"`
-	Samples []SpeakerSample `json:"samples"`
-}
-
-// Config holds everything the identify server needs.
+// Config is what the page needs to do its work, with the two things it cannot
+// do itself passed in: fetching a recording's audio, and telling the service
+// who a voice is.
 type Config struct {
-	AudioData []byte
-	AudioID   string
-	Speakers  map[string]string // full speaker map from transcription
-	Segments  []transcript.Segment
+	Voices []Voice
+	// Known is everybody the service already has, offered as you type so a
+	// name is picked rather than spelt again. Two spellings of one person are
+	// two people, and this is where that is cheapest to prevent.
+	Known []string
+	Audio func(ctx context.Context, recording string) ([]byte, error)
+	Name  func(ctx context.Context, v Voice, name, company string, surnameUnknown bool) (string, error)
 }
 
-// Result contains the name assignments collected from the web UI.
-type Result struct {
-	Names map[string]string // speakerID -> name
+// Named is what the page settled: each voice and the person it now holds.
+type Named []Settled
+
+// Settled is one voice that stopped being SPEAKER_nn.
+type Settled struct {
+	Voice  Voice
+	Person string
 }
 
-// RunServer starts a local web server for speaker identification.
-// It returns the name assignments once the user submits or skips.
-func RunServer(ctx context.Context, cfg Config) (*Result, error) {
-	unresolvedIDs := unresolvedSpeakers(cfg.Speakers)
-	if len(unresolvedIDs) == 0 {
-		return &Result{Names: map[string]string{}}, nil
+// Files is the transcripts a run touched, which are the ones worth rewriting.
+func (n Named) Files() []string {
+	seen := map[string]bool{}
+	var files []string
+	for _, settled := range n {
+		if !seen[settled.Voice.File] {
+			seen[settled.Voice.File] = true
+			files = append(files, settled.Voice.File)
+		}
 	}
+	return files
+}
 
-	speakerInfos := buildSpeakerInfo(unresolvedIDs, cfg.Segments)
-	speakerJSON, _ := json.Marshal(speakerInfos)
-
-	resultCh := make(chan *Result, 1)
+// RunServer opens the page and returns when whoever is using it is finished.
+//
+// Each name is registered the moment it is typed, rather than at the end. A
+// browser tab closed halfway through then leaves the voices already named
+// named, which for a page that exists to work through a list is the difference
+// between an interruption and a wasted sitting.
+func RunServer(ctx context.Context, cfg Config) (Named, error) {
+	if len(cfg.Voices) == 0 {
+		return Named{}, nil
+	}
 
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		return nil, fmt.Errorf("starting listener: %w", err)
 	}
-	port := listener.Addr().(*net.TCPAddr).Port
 
-	tmpl := template.Must(template.New("page").Parse(pageHTML))
-
-	mux := http.NewServeMux()
-
-	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "text/html; charset=utf-8")
-		tmpl.Execute(w, map[string]any{
-			"SpeakersJSON": template.JS(speakerJSON),
-			"Speakers":     speakerInfos,
-		})
-	})
-
-	mux.HandleFunc("/audio", func(w http.ResponseWriter, r *http.Request) {
-		http.ServeContent(w, r, "audio.mp3", time.Time{}, bytes.NewReader(cfg.AudioData))
-	})
-
-	mux.HandleFunc("/save", func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodPost {
-			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
-			return
-		}
-
-		var names map[string]string
-		if err := json.NewDecoder(r.Body).Decode(&names); err != nil {
-			http.Error(w, "bad request", http.StatusBadRequest)
-			return
-		}
-
-		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
-
-		resultCh <- &Result{Names: names}
-	})
-
-	mux.HandleFunc("/skip", func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
-
-		resultCh <- &Result{Names: map[string]string{}}
-	})
-
-	server := &http.Server{Handler: mux}
+	page := &pageServer{cfg: cfg, done: make(chan struct{}), audio: map[string][]byte{}}
+	server := &http.Server{Handler: page.routes()}
 	go server.Serve(listener)
 
-	url := fmt.Sprintf("http://127.0.0.1:%d", port)
-	fmt.Printf("Opening browser at %s\n", url)
+	url := fmt.Sprintf("http://127.0.0.1:%d", listener.Addr().(*net.TCPAddr).Port)
+	fmt.Printf("Naming %d voice(s) at %s\n", len(cfg.Voices), url)
 	browser.Open(url)
 
 	select {
-	case result := <-resultCh:
-		// Close immediately — don't wait for open connections to drain
-		server.Close()
-		return result, nil
+	case <-page.done:
 	case <-ctx.Done():
-		server.Close()
-		return nil, ctx.Err()
 	}
+	server.Close()
+
+	page.mu.Lock()
+	defer page.mu.Unlock()
+	return page.named, nil
 }
 
-// UnresolvedSpeakers returns speaker IDs that were not matched to a known name.
-func UnresolvedSpeakers(speakers map[string]string) []string {
-	return unresolvedSpeakers(speakers)
+type pageServer struct {
+	cfg   Config
+	done  chan struct{}
+	once  sync.Once
+	mu    sync.Mutex
+	named Named
+	audio map[string][]byte
 }
 
-func unresolvedSpeakers(speakers map[string]string) []string {
-	var ids []string
-	for k, v := range speakers {
-		if k == v {
-			ids = append(ids, k)
-		}
-	}
-	sort.Strings(ids)
-	return ids
-}
+func (p *pageServer) routes() http.Handler {
+	tmpl := template.Must(template.New("page").Parse(pageHTML))
+	mux := http.NewServeMux()
 
-func buildSpeakerInfo(unresolvedIDs []string, segments []transcript.Segment) []SpeakerInfo {
-	var speakers []SpeakerInfo
-
-	for _, id := range unresolvedIDs {
-		var segs []transcript.Segment
-		for _, seg := range segments {
-			if seg.Speaker == id {
-				segs = append(segs, seg)
-			}
-		}
-
-		// Pick the longest segments as representative samples
-		sort.Slice(segs, func(i, j int) bool {
-			return (segs[i].EndTime - segs[i].StartTime) > (segs[j].EndTime - segs[j].StartTime)
+	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		voices, _ := json.Marshal(p.cfg.Voices)
+		known, _ := json.Marshal(p.cfg.Known)
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		tmpl.Execute(w, map[string]any{
+			"VoicesJSON": template.JS(voices),
+			"KnownJSON":  template.JS(known),
 		})
+	})
 
-		n := maxSamples
-		if len(segs) < n {
-			n = len(segs)
+	mux.HandleFunc("GET /audio/{recording}", func(w http.ResponseWriter, r *http.Request) {
+		recording := r.PathValue("recording")
+		data, err := p.audioOf(r.Context(), recording)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadGateway)
+			return
+		}
+		http.ServeContent(w, r, recording+".mp3", time.Time{}, bytes.NewReader(data))
+	})
+
+	mux.HandleFunc("POST /name", func(w http.ResponseWriter, r *http.Request) {
+		var asked struct {
+			Index          int    `json:"index"`
+			Name           string `json:"name"`
+			Company        string `json:"company"`
+			SurnameUnknown bool   `json:"surname_unknown"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&asked); err != nil || asked.Index < 0 || asked.Index >= len(p.cfg.Voices) {
+			answer(w, http.StatusBadRequest, map[string]string{"error": "bad request"})
+			return
 		}
 
-		samples := make([]SpeakerSample, n)
-		for i := 0; i < n; i++ {
-			samples[i] = SpeakerSample{
-				StartSec: float64(segs[i].StartTime) / 1000.0,
-				EndSec:   float64(segs[i].EndTime) / 1000.0,
-				Text:     segs[i].Content,
-			}
+		voice := p.cfg.Voices[asked.Index]
+		display, err := p.cfg.Name(r.Context(), voice, asked.Name, asked.Company, asked.SurnameUnknown)
+		if err != nil {
+			answer(w, http.StatusOK, map[string]string{"error": err.Error()})
+			return
 		}
 
-		speakers = append(speakers, SpeakerInfo{
-			ID:      id,
-			Samples: samples,
-		})
+		p.mu.Lock()
+		p.named = append(p.named, Settled{Voice: voice, Person: display})
+		p.mu.Unlock()
+		answer(w, http.StatusOK, map[string]string{"named": display})
+	})
+
+	mux.HandleFunc("POST /done", func(w http.ResponseWriter, r *http.Request) {
+		answer(w, http.StatusOK, map[string]string{"status": "ok"})
+		p.once.Do(func() { close(p.done) })
+	})
+
+	return mux
+}
+
+// audioOf downloads a recording once and keeps it for as long as the page is
+// open, since every voice in one recording plays out of the same file.
+func (p *pageServer) audioOf(ctx context.Context, recording string) ([]byte, error) {
+	p.mu.Lock()
+	held, ok := p.audio[recording]
+	p.mu.Unlock()
+	if ok {
+		return held, nil
 	}
 
-	return speakers
+	data, err := p.cfg.Audio(ctx, recording)
+	if err != nil {
+		return nil, err
+	}
+	p.mu.Lock()
+	p.audio[recording] = data
+	p.mu.Unlock()
+	return data, nil
+}
+
+func answer(w http.ResponseWriter, status int, body any) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	json.NewEncoder(w).Encode(body)
 }

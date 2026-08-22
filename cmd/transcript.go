@@ -1,19 +1,16 @@
 package cmd
 
 import (
-	"bufio"
 	"context"
 	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
-	"sync"
 
 	"github.com/jaisonerick/plaud-cli/internal/api"
-	"github.com/jaisonerick/plaud-cli/internal/identify"
 	"github.com/jaisonerick/plaud-cli/internal/modal"
-	"github.com/jaisonerick/plaud-cli/internal/speaker"
 	"github.com/jaisonerick/plaud-cli/internal/transcript"
 	"github.com/spf13/cobra"
 )
@@ -28,7 +25,6 @@ var (
 	trContextFile string
 	trLanguage    string
 	trInto        string
-	trIdentify    bool
 	trOpts        modal.TranscribeOpts
 )
 
@@ -62,7 +58,6 @@ refreshes the names in it when it is already there.
 Examples:
   plaud transcript abc123 --context-file ./meeting-prep.md
   plaud transcript abc123 --context "Vexia and CERC on payments; Éricles Bento, Zeni"
-  plaud transcript abc123 --context-file ./prep.md --identify
   plaud transcript abc123 --context-file ./prep.md --force
   plaud transcript --since 2026-08-01 --context-file ./briefing.md --output-dir ./recordings
   plaud transcript --tag cliente --context-file ./briefing.md --format srt`,
@@ -95,7 +90,7 @@ Examples:
 		trOpts.ContextDoc = contextDoc
 		trOpts.Language = trLanguage
 		trOpts.Force = trForce
-		how := filing{format: trFormat, force: trForce, identify: trIdentify, opts: trOpts}
+		how := filing{format: trFormat, force: trForce, opts: trOpts}
 
 		recordings, err := chooseRecordings(ctx, args, trFilter, trAll)
 		if err != nil {
@@ -208,10 +203,9 @@ func printReport(r report) {
 // Both `transcript` and `fetch` fill one in, which is what makes them the same
 // work with a different way of choosing the destination.
 type filing struct {
-	format   string
-	force    bool
-	identify bool
-	opts     modal.TranscribeOpts
+	format string
+	force  bool
+	opts   modal.TranscribeOpts
 }
 
 // job is one recording on its way to one file.
@@ -410,7 +404,7 @@ func agreedName(ids []string, names map[string]string) (name string, split bool)
 }
 
 func (j job) fromAudio(ctx context.Context, whisper *modal.HTTPClient) error {
-	result, audioData, err := whisperTranscribe(ctx, os.Stderr, whisper, j.recording.ID, j.how.opts)
+	result, _, err := whisperTranscribe(ctx, os.Stderr, whisper, j.recording.ID, j.how.opts)
 	if err != nil {
 		return err
 	}
@@ -439,98 +433,37 @@ func (j job) fromAudio(ctx context.Context, whisper *modal.HTTPClient) error {
 		Sparse: result.Sparse, CharsPerSecond: result.CharsPerSecond,
 	})
 
-	return reportSpeakers(ctx, whisper, result, audioData, j)
-}
-
-// reportSpeakers names the voices the run separated, and offers to put people
-// to the ones nothing recognised when a person is there to say who they are.
-func reportSpeakers(ctx context.Context, whisper *modal.HTTPClient, result *modal.TranscribeResult, audioData []byte, j job) error {
-	if len(result.Speakers) == 0 {
-		return nil
-	}
-
-	var recognized, names []string
-	for id, name := range result.Speakers {
-		names = append(names, name)
-		if id != name {
-			recognized = append(recognized, name)
-		}
-	}
-
-	if !j.how.identify {
-		fmt.Fprintf(os.Stderr, "Speakers: %s\n", strings.Join(names, ", "))
-		return nil
-	}
-
-	if len(recognized) > 0 {
-		fmt.Fprintf(os.Stderr, "Recognized: %s\n", strings.Join(recognized, ", "))
-	}
-	unresolved := identify.UnresolvedSpeakers(result.Speakers)
-	if len(unresolved) == 0 {
-		fmt.Fprintf(os.Stderr, "All speakers identified: %s\n", strings.Join(recognized, ", "))
-		return nil
-	}
-
-	fmt.Fprintf(os.Stderr, "Unidentified: %s\n", strings.Join(unresolved, ", "))
-	fmt.Fprintf(os.Stderr, "\nOpen browser to identify? [Y/n] ")
-	line, _ := bufio.NewReader(os.Stdin).ReadString('\n')
-	switch strings.TrimSpace(strings.ToLower(line)) {
-	case "", "y", "yes":
-	default:
-		return nil
-	}
-
-	return runIdentify(ctx, whisper, result, audioData, j)
-}
-
-// runIdentify opens the browser that asks who each unrecognised voice is,
-// registers the answers with the service, and rewrites the file with them.
-func runIdentify(ctx context.Context, whisper *modal.HTTPClient, result *modal.TranscribeResult, audioData []byte, j job) error {
-	idResult, err := identify.RunServer(ctx, identify.Config{
-		AudioData: audioData,
-		AudioID:   result.AudioID,
-		Speakers:  result.Speakers,
-		Segments:  result.Segments,
-	})
-	if err != nil {
-		return fmt.Errorf("speaker identification: %w", err)
-	}
-	if len(idResult.Names) == 0 {
-		return nil
-	}
-
-	fmt.Fprintf(os.Stderr, "\n")
-	var wg sync.WaitGroup
-	for speakerID, name := range idResult.Names {
-		wg.Add(1)
-		go func(sid, typed string) {
-			defer wg.Done()
-			// The browser asks for a name; the convention is to type the same
-			// form a transcript shows, "First Last (Company)".
-			person, company := speaker.ParseDisplay(typed)
-			if company == "" {
-				fmt.Fprintf(os.Stderr, "  Skipped %s: write %q as \"First Last (Company)\"\n", sid, typed)
-				return
-			}
-			saved, err := whisper.NameSpeaker(ctx, result.AudioID, sid, person, company, false)
-			if err != nil {
-				fmt.Fprintf(os.Stderr, "  Warning: could not register %s: %v\n", sid, err)
-				return
-			}
-			fmt.Fprintf(os.Stderr, "  Registered %s (%s)\n", saved.Display(), sid)
-		}(speakerID, name)
-	}
-	wg.Wait()
-
-	for sid, name := range idResult.Names {
-		result.Speakers[sid] = name
-	}
-	applySpeakerNames(result.Segments, result.Speakers)
-	if err := saveWhisperTranscript(result, j.how.format, j.dest); err != nil {
-		return fmt.Errorf("updating the transcript with the names: %w", err)
-	}
-	fmt.Fprintf(os.Stderr, "  Updated %s\n", j.dest)
+	reportSpeakers(result)
 	return nil
+}
+
+// reportSpeakers names the voices the run separated, and says when some of
+// them are nobody yet. Putting a person to a voice needs somebody who was in
+// the room, so it is a thing to be told about rather than a step to be walked
+// through here: 'plaud speaker identify' is the page that does it.
+func reportSpeakers(result *modal.TranscribeResult) {
+	if len(result.Speakers) == 0 {
+		return
+	}
+
+	var named, unnamed []string
+	for label, name := range result.Speakers {
+		if label == name {
+			unnamed = append(unnamed, label)
+			continue
+		}
+		named = append(named, name)
+	}
+	sort.Strings(named)
+	sort.Strings(unnamed)
+
+	if len(named) > 0 {
+		fmt.Fprintf(os.Stderr, "Speakers: %s\n", strings.Join(named, ", "))
+	}
+	if len(unnamed) > 0 {
+		fmt.Fprintf(os.Stderr, "%s belong to nobody the service knows. Run 'plaud speaker identify' to say who they are.\n",
+			strings.Join(unnamed, ", "))
+	}
 }
 
 func applySpeakerNames(segments []transcript.Segment, speakers map[string]string) {
@@ -607,6 +540,5 @@ func init() {
 	f.StringVar(&trLanguage, "language", "", "force a language code (e.g. pt, en), empty to detect it")
 	f.StringVar(&trContext, "context", "", "what the recording is about, written out; settles how names are spelt")
 	f.StringVar(&trContextFile, "context-file", "", "a file describing the recording, read as the context")
-	f.BoolVar(&trIdentify, "identify", false, "ask who the unrecognised voices are once the transcript is written")
 	rootCmd.AddCommand(transcriptCmd)
 }

@@ -2,6 +2,7 @@
 package browser
 
 import (
+	"os"
 	"os/exec"
 	"runtime"
 )
@@ -10,6 +11,12 @@ import (
 // is nobody there: every caller has already printed the URL for the case where
 // this does nothing, because on a server, over ssh, or in a container it will.
 func Open(url string) {
+	// A machine where opening a window is wrong says so: a page driven from
+	// somewhere else, or a run nobody is watching.
+	if os.Getenv("PLAUD_NO_BROWSER") != "" {
+		return
+	}
+
 	var command string
 	var args []string
 

@@ -57,6 +57,7 @@ PLAUD_EMAIL            Non-interactive `login`: email to send the code to
 PLAUD_CODE             Non-interactive `login`: the emailed code
 PLAUD_OTP_TOKEN        Non-interactive `login`: the OTP token from the send step
 PLAUD_SETTINGS         The file holding what this person settles per repository
+PLAUD_NO_BROWSER       Print the URL of a page instead of opening a window
 ```
 
 `PLAUD_TOKEN` is what makes the CLI run where no interactive login ever happened: a container, a CI job, another person's machine. The environment wins over the file, and nothing is written to disk.
@@ -128,6 +129,8 @@ There is no index to build. The catalog is read whole and filtered in `catalog l
 
 ## Transcription
 
+A transcription that separates a voice nobody knows says so, and leaves it there: putting a person to a voice needs somebody who was in the room, so it is a thing to be told about rather than a step to walk a caller through. `plaud speaker identify` is where that is done.
+
 `transcript` is the one way to get the text of a recording, and the transcription service is the one place it comes from. Plaud's own transcript is never used, even where the account has one: it carries no voice, so a file written from it could never have a name corrected, and every recording taken that way would sit outside speaker recognition forever. **A transcription is made once.** The service keeps what it decoded, and a recording that has been through it comes back in seconds rather than through a GPU; `--force` is what decodes it again, and it is the one thing about a transcription only a caller can decide, because only a caller knows the transcript on record is one to throw away.
 
 Deciding otherwise costs more than the minutes. Transcribing again separates the voices afresh, so the labels are renumbered and every transcript written from the run before points at voices that no longer exist.
@@ -180,7 +183,9 @@ The store is shared by everyone signed in, which is why a lone first name is ref
 
 No voice ever leaves the service. An embedding that travelled would put people who never agreed to it on the laptop of everyone who transcribed a meeting they were in. What makes naming possible later is that a transcription's voices are keyed by the **Plaud recording id**, which the caller already knows and never has to write down. The service refuses a transcription that does not carry one. **Transcribing a recording again keeps the voices of the run before**, now that each carries an id nobody confuses with another: a transcript written back then names them by id and goes on resolving forever. What a label means is the current run's alone, so naming SPEAKER_02 reaches the voice whoever is naming it is looking at, and a label from an older run names nobody.
 
-- `speaker name <recording-id> <label> "First Last" --company X` says who one of the voices is.
+- `speaker pending` counts the voices still called SPEAKER_nn in the transcripts of a repository. It reads the files and nothing else: a transcript says which recording it came from and which voice each name stands for, so this costs no request and no account. A transcript written before those two fields is reported separately, because there is nothing to ask about it until a fetch stamps them in.
+- `speaker identify` opens a page that plays the stretches where each unnamed voice is speaking and takes the name, offering the people already known as you type. Each name is registered the moment it is typed rather than at the end, so a tab closed halfway leaves the voices already named named; when the page is finished the transcripts are rewritten. `internal/identify` holds the scan, the server and the page. `PLAUD_NO_BROWSER` stops it opening a window, for a run driven from somewhere else.
+- `speaker name <recording-id> <key> "First Last" --company X` says who one of the voices is, keyed by voice id or by label. It is the same call the page makes.
 - `speaker teach <recording-id> --ranges file.json` learns from stretches somebody chose, one sample per person. A label that holds two voices is the average of both, so naming it whole teaches neither, and that speech is lost to the recogniser until it is cut apart.
 - `speaker enroll` learns from the Plaud transcripts that name their speakers in full, and leaves out whoever they name by a first name alone. Nothing mechanical turns "Tom" into Antonio Colombo, and there is no longer a dictionary that would: one person has one name. Whoever is left out is named from a recording instead, and is recognised by voice from then on however the transcript spelt them.
 - `speaker rename` corrects who somebody is, carrying their voices; `speaker forget` drops a person learned wrongly, which otherwise keeps claiming somebody else's voice in every transcription.
