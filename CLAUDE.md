@@ -23,6 +23,7 @@ git push --tags
 - `cmd/` — Cobra CLI commands (one file per command)
 - `internal/api/` — Plaud API HTTP client
 - `internal/config/` — Config persistence (`~/.config/plaud/`)
+- `internal/repo/` — What a repository declares about the transcripts it takes in (`.plaud.json`)
 - `internal/transcript/` — Transcript parsing, formatting (txt/srt/md), search, and filename utilities
 - `internal/ai/` — Claude API integration for ask/summarize commands
 - `internal/modal/` — Modal client for Whisper transcription
@@ -78,6 +79,31 @@ Only accounts on the domains in `services/whisper/modal_whisper/auth.py` are ser
 
 `GET /auth/config` is the one route outside the guest list, since a caller needs it before it can have a token. Every other route hangs off a router that carries the check, so a route added later cannot forget it.
 
+## What a Repository Declares
+
+A transcript is not finished when it is decoded; it is finished when it is in the repository that wanted it, under the name that repository uses. Those are the repository's decisions, so they are read from `.plaud.json` at its root rather than passed on every call. `internal/repo` reads it, `plaud config` prints what was resolved, and `plaud doctor` reports it alongside the two sign-ins.
+
+The file is looked for from the working directory upwards, and the directory holding it is the root. Asking git for the root instead is wrong twice: a checkout holding a declaration inside a subdirectory would be governed by the outer one, and a directory that is not a checkout has no root to offer.
+
+| Key | Effect |
+| :-- | :-- |
+| `context` | The document describing this work, read as what settles how names are spelt. |
+| `filing` | The document saying where a transcript belongs here. |
+| `scratch` | Where transcripts land when nothing names a destination. |
+| `hub` | Turns on the catalog and names the directory holding it. |
+| `language` | Settles the language of every recording taken in here. |
+| `dest`, `name` | Templates over `{date}`, `{year}`, `{month}`, `{day}`, `{time}`, `{slug}`, `{id}`, `{short_id}`. A field nothing answers is refused rather than written into a filename. |
+| `front_matter` | Written above the `voices:` block, so a transcript arrives with what the repository files by. |
+| `profiles` | Named sets of the keys above, plus the `tag` that selects recordings for each. |
+| `exclude_tags`, `exclude_reason` | Recordings out of scope here. Catalog only. |
+| `utc_offset` | The repository's timezone, so two machines file one recording under one day. |
+
+`plaud fetch <id>` is the end-to-end errand: the transcript to where the repository puts it, the summary beside it when Plaud has one, the front matter the repository files by, and the recording's id written into the file. That last one is what lets a destination answer for itself, so what has already been filed is read from the directory rather than remembered somewhere.
+
+The description is composed rather than chosen. The repository's document holds the project's people and how their names are spelt; `--context` on the call holds who was in this room. They know different things, so one is added to the other. `--context-file` is the exception, standing in for the document entirely, which is how a recording described by a paper of its own is fetched.
+
+`transcript` falls back to the repository's document when neither flag is passed, and a run that only settles the names in files already on disk needs no description at all, because it decodes nothing.
+
 ## Transcription
 
 `transcript` is the one way to get the text of a recording. **A transcription is made once.** The service keeps what it decoded, and a recording that has been through it comes back in seconds rather than through a GPU; `--force` is what decodes it again, and it is the one thing about a transcription only a caller can decide, because only a caller knows the transcript on record is one to throw away.
@@ -88,7 +114,7 @@ What is kept holds the label of each voice, never the person: who a label is com
 
 Which engine ran is not a choice a caller makes, and the CLI does not offer one. Neither are the stages: no flag turns off diarization, polishing, recognition or compaction. The tool exists to finish a transcript, and a caller weighing whether to run one of those is being asked to price the tool rather than use it.
 
-One of `--context` or `--context-file` is required: the description written out, or a file holding it. It is what settles how the names in it are spelt; without it the polisher guesses, and it guesses differently on each run, so two transcripts of the same people disagree. Which of the two it is used to be guessed from the value, and that guess was wrong in both directions: a description in Portuguese carries a date, a date carries a slash, and a slash read as a path turned the sentence into a filename nobody could open. `--context` now refuses a value that names a file that exists, rather than polishing a transcript against a path.
+A description is required to decode: `--context` is it written out, `--context-file` a file holding it, and a repository declaring `context` supplies it without either. It is what settles how the names in it are spelt; without it the polisher guesses, and it guesses differently on each run, so two transcripts of the same people disagree. Which of the two it is used to be guessed from the value, and that guess was wrong in both directions: a description in Portuguese carries a date, a date carries a slash, and a slash read as a path turned the sentence into a filename nobody could open. `--context` now refuses a value that names a file that exists, rather than polishing a transcript against a path.
 
 A context that does not name the people and companies in the recording is worse than a short one that does: the polisher writes a company it half-heard into a name it recognises from what it was given, so a briefing about other clients turns a real name into theirs.
 

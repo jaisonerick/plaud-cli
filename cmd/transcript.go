@@ -87,9 +87,15 @@ Examples:
 		if err != nil {
 			return err
 		}
+		if contextDoc == "" {
+			if contextDoc, err = declaredContext(); err != nil {
+				return err
+			}
+		}
 		trOpts.ContextDoc = contextDoc
 		trOpts.Language = trLanguage
 		trOpts.Force = trForce
+		how := filing{format: trFormat, force: trForce, identify: trIdentify, opts: trOpts}
 
 		recordings, err := chooseRecordings(ctx, args, trFilter, trAll)
 		if err != nil {
@@ -104,7 +110,7 @@ Examples:
 			return fmt.Errorf("--into names one file, and this matched %d recordings", len(recordings))
 		}
 
-		pending := plan(recordings)
+		pending := plan(recordings, how)
 
 		// Resolve the service once: a missing credential should fail before
 		// the first recording rather than once per recording.
@@ -118,6 +124,11 @@ Examples:
 			if !job.written {
 				toWrite++
 			}
+		}
+		// A run that only settles the names in files already here decodes
+		// nothing, so there is nothing for a description to spell.
+		if toWrite > 0 && contextDoc == "" {
+			return fmt.Errorf("%s", noDescription)
 		}
 		if toWrite > 1 {
 			fmt.Fprintf(os.Stderr, "Transcribing %d recording(s); the %d already on disk have their voices checked against the audio.\n", toWrite, len(pending)-toWrite)
@@ -156,6 +167,8 @@ Examples:
 type report struct {
 	Recording      string            `json:"recording_id"`
 	Path           string            `json:"path,omitempty"`
+	Summary        string            `json:"summary_path,omitempty"`
+	Filing         string            `json:"filing,omitempty"`
 	Written        bool              `json:"written"`
 	Source         string            `json:"source"`
 	Renamed        int               `json:"renamed,omitempty"`
@@ -166,10 +179,23 @@ type report struct {
 	Reason         string            `json:"reason,omitempty"`
 }
 
+// held is where a report goes when the command that will print it has more to
+// say about the same recording. `fetch` answers for the whole errand, and a
+// second object describing the transcript inside it would be a second answer.
+var held *report
+
 func say(r report) {
+	if held != nil {
+		*held = r
+		return
+	}
 	if !jsonOut {
 		return
 	}
+	printReport(r)
+}
+
+func printReport(r report) {
 	line, err := json.Marshal(r)
 	if err != nil {
 		return
@@ -177,10 +203,22 @@ func say(r report) {
 	fmt.Println(string(line))
 }
 
+// filing is how one recording becomes one file: the format to write, whether
+// to decode the audio again, and what the service is told about the recording.
+// Both `transcript` and `fetch` fill one in, which is what makes them the same
+// work with a different way of choosing the destination.
+type filing struct {
+	format   string
+	force    bool
+	identify bool
+	opts     modal.TranscribeOpts
+}
+
 // job is one recording on its way to one file.
 type job struct {
 	recording api.RecordingSimple
 	dest      string
+	how       filing
 	// written says the file is already there, which leaves only the names in
 	// it to bring up to date.
 	written bool
@@ -192,28 +230,34 @@ type job struct {
 // plan puts each recording next to the file it belongs in. A transcript
 // already on disk is not skipped: its text is settled, but a voice named after
 // it was written is still called SPEAKER_03 in it.
-func plan(recordings []api.RecordingSimple) []job {
+func plan(recordings []api.RecordingSimple, how filing) []job {
 	var pending []job
 	for _, r := range recordings {
-		dest := filepath.Join(trOutputDir, transcript.BaseName(r.Name, r.StartTime)+transcript.Ext(trFormat))
+		dest := filepath.Join(trOutputDir, transcript.BaseName(r.Name, r.StartTime)+transcript.Ext(how.format))
 		if trInto != "" {
 			dest = trInto
 		}
-		written := false
-		if !trForce {
-			_, err := os.Stat(dest)
-			written = err == nil
-		}
-		pending = append(pending, job{recording: r, dest: dest, written: written, alone: len(recordings) == 1})
+		pending = append(pending, newJob(r, dest, how, len(recordings) == 1))
 	}
 	return pending
+}
+
+// newJob settles whether the file is already there, which is the difference
+// between writing a transcript and bringing the names in one up to date.
+func newJob(r api.RecordingSimple, dest string, how filing, alone bool) job {
+	written := false
+	if !how.force {
+		_, err := os.Stat(dest)
+		written = err == nil
+	}
+	return job{recording: r, dest: dest, how: how, written: written, alone: alone}
 }
 
 func (j job) run(ctx context.Context, whisper *modal.HTTPClient) error {
 	if j.written {
 		return j.refreshNames(ctx, whisper)
 	}
-	if !trForce && j.recording.HasTranscript {
+	if !j.how.force && j.recording.HasTranscript {
 		written, err := j.fromRecord(ctx)
 		if err != nil {
 			return err
@@ -236,7 +280,7 @@ func (j job) run(ctx context.Context, whisper *modal.HTTPClient) error {
 // asks by its labels, which answers as long as the recording has not been
 // separated again since.
 func (j job) refreshNames(ctx context.Context, whisper *modal.HTTPClient) error {
-	if trFormat != "md" {
+	if j.how.format != "md" {
 		if j.alone {
 			fmt.Fprintf(os.Stderr, "%s is already there; only a markdown transcript can have its names refreshed.\n", j.dest)
 		}
@@ -395,11 +439,11 @@ func (j job) fromRecord(ctx context.Context) (bool, error) {
 	if err != nil {
 		return false, fmt.Errorf("parsing transcript: %w", err)
 	}
-	return true, saveTranscript(segments, trFormat, j.dest)
+	return true, saveTranscript(segments, j.how.format, j.dest)
 }
 
 func (j job) fromAudio(ctx context.Context, whisper *modal.HTTPClient) error {
-	result, audioData, err := whisperTranscribe(ctx, os.Stderr, whisper, j.recording.ID, trOpts)
+	result, audioData, err := whisperTranscribe(ctx, os.Stderr, whisper, j.recording.ID, j.how.opts)
 	if err != nil {
 		return err
 	}
@@ -411,7 +455,7 @@ func (j job) fromAudio(ctx context.Context, whisper *modal.HTTPClient) error {
 		say(report{Recording: j.recording.ID, Source: "service", Reason: "no speech"})
 		return nil
 	}
-	if err := saveWhisperTranscript(result, trFormat, j.dest); err != nil {
+	if err := saveWhisperTranscript(result, j.how.format, j.dest); err != nil {
 		return err
 	}
 	if result.Reused {
@@ -446,7 +490,7 @@ func reportSpeakers(ctx context.Context, whisper *modal.HTTPClient, result *moda
 		}
 	}
 
-	if !trIdentify {
+	if !j.how.identify {
 		fmt.Fprintf(os.Stderr, "Speakers: %s\n", strings.Join(names, ", "))
 		return nil
 	}
@@ -515,7 +559,7 @@ func runIdentify(ctx context.Context, whisper *modal.HTTPClient, result *modal.T
 		result.Speakers[sid] = name
 	}
 	applySpeakerNames(result.Segments, result.Speakers)
-	if err := saveWhisperTranscript(result, trFormat, j.dest); err != nil {
+	if err := saveWhisperTranscript(result, j.how.format, j.dest); err != nil {
 		return fmt.Errorf("updating the transcript with the names: %w", err)
 	}
 	fmt.Fprintf(os.Stderr, "  Updated %s\n", j.dest)
@@ -597,6 +641,5 @@ func init() {
 	f.StringVar(&trContext, "context", "", "what the recording is about, written out; settles how names are spelt")
 	f.StringVar(&trContextFile, "context-file", "", "a file describing the recording, read as the context")
 	f.BoolVar(&trIdentify, "identify", false, "ask who the unrecognised voices are once the transcript is written")
-	transcriptCmd.MarkFlagsOneRequired("context", "context-file")
 	rootCmd.AddCommand(transcriptCmd)
 }
