@@ -46,6 +46,11 @@ type Layer struct {
 	ExcludeReason string             `json:"exclude_reason,omitempty"`
 	UTCOffset     *int               `json:"utc_offset,omitempty"`
 	Profiles      map[string]Profile `json:"profiles,omitempty"`
+
+	// Skipped is the recordings this person looked at and decided are not this
+	// repository's, against why. Without it, everything they have already
+	// turned down is offered again on the next pass.
+	Skipped map[string]string `json:"skipped,omitempty"`
 }
 
 var remoteURL = regexp.MustCompile(`^(?:[\w.+-]+@|[a-z]+://(?:[\w.+-]+@)?)?([^/:]+)[:/](.+?)(?:\.git)?/?$`)
@@ -167,6 +172,12 @@ func (c *Config) apply(l *Layer, from string) {
 	}
 	for name, profile := range l.Profiles {
 		c.mergeProfile(name, profile, from)
+	}
+	for id, why := range l.Skipped {
+		if c.Skipped == nil {
+			c.Skipped = map[string]string{}
+		}
+		c.Skipped[id] = why
 	}
 }
 

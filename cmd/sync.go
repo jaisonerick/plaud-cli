@@ -43,7 +43,8 @@ written is still SPEAKER_02 in it. Every transcript this brings in range of is
 asked about again, and the ones that changed name are named in the output.
 --only-new skips that.
 
-Recordings carrying an excluded tag are left alone.
+Recordings carrying an excluded tag are left alone, and so are the ones turned
+down with 'plaud triage skip'.
 
 Examples:
   plaud sync --profile cerc
@@ -162,6 +163,11 @@ func (e *errand) plan(ctx context.Context, recordings []api.RecordingSimple) (wo
 	planned := work{at: map[string]string{}}
 	for _, r := range recordings {
 		if outOfScope(r, byID, excluded) {
+			continue
+		}
+		// A recording turned down here stays turned down, whatever a filter
+		// widened to. Offering it again is what triage exists to stop.
+		if _, turned := e.repo.Skipped[r.ID]; turned {
 			continue
 		}
 		dest, err := e.destination(r)

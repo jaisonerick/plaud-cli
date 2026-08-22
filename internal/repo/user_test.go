@@ -134,3 +134,38 @@ func TestAnEmptySettingsFileIsNoSettings(t *testing.T) {
 		t.Errorf("an empty file produced %+v", settings)
 	}
 }
+
+func TestARecordingTurnedDownStaysTurnedDown(t *testing.T) {
+	root := t.TempDir()
+	write(t, filepath.Join(root, FileName), `{"scratch": "workspace"}`)
+	alone(t, `{"repositories": {"`+root+`": {"skipped": {"abc123": "Dinie, not this client"}}}}`)
+
+	c, err := Find(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if c.Skipped["abc123"] != "Dinie, not this client" {
+		t.Errorf("what was turned down came back as %v", c.Skipped)
+	}
+}
+
+func TestTurningSomethingDownIsNotTheRepositorysToSay(t *testing.T) {
+	root := t.TempDir()
+	// The committed file offering a skipped list would decide for everyone,
+	// and whose recordings they are differs per person.
+	write(t, filepath.Join(root, FileName), `{"skipped": {"abc123": "no"}}`)
+	alone(t, "")
+
+	c, err := Find(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if len(c.Skipped) != 0 {
+		t.Errorf("the repository turned something down: %v", c.Skipped)
+	}
+	if len(c.Unknown) != 1 || c.Unknown[0] != "skipped" {
+		t.Errorf("the key was not reported as unread: %v", c.Unknown)
+	}
+}

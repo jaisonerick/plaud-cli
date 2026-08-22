@@ -40,6 +40,11 @@ type Config struct {
 	UTCOffset     *int
 	Profiles      map[string]Profile
 
+	// Skipped is what the person running this decided is not this
+	// repository's, which is how a recording turned down once stays turned
+	// down. It comes from their settings alone: the recordings are theirs.
+	Skipped map[string]string
+
 	// Identity is what names this repository in a person's own settings, and
 	// Settings is where those settings live. Both are printed rather than
 	// looked up, so somebody wondering which entry governs them can see it.

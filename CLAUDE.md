@@ -112,6 +112,10 @@ The description is composed rather than chosen. The repository's document holds 
 
 `plaud sync` does the same errand for every recording a tag selects, and a profile names both where those recordings are filed and the tag that selects them, so `--profile cerc` is the whole instruction. A profile whose tag nobody set is refused rather than run: without one, the filter selects the entire account. What says a recording is already here is the file at the destination the same rules produce, which is why running it twice decodes nothing.
 
+`plaud triage` is the other way in, for an account that tags nothing. A tag is the short way to say which recordings are a repository's, and plenty of accounts have none; triage transcribes every recording nobody has placed and describes it — who spoke and enough of what was said to tell whose meeting it was — so a person can say. Nothing is written to disk: transcribing is what makes a recording readable at all, the service keeps what it decoded, and a recording kept afterwards comes back in seconds while one turned down cost a single pass, ever. The recognised speakers do most of the work, which is the case that pays for speaker recognition existing.
+
+What comes back is turned into `plaud fetch` for the ones that belong here and `plaud triage skip` for the ones that do not. Turning one down is a person's decision about their own recordings, so it lands in their settings and never in the committed file, and `triage` and `sync` both leave it alone from then on. The reason is worth writing: what tells a recording turned down for being another client's from one turned down for being three seconds of pocket noise is the reason, and neither the date nor the title says.
+
 A transcript already here is not left alone. Who a voice belongs to is settled by the people known today, so somebody named since the file was written is still SPEAKER_02 in it, and a sync that only fetched what was missing would leave that standing. Every transcript in range is asked about again, and the ones whose turns changed name are listed at the end of the run: a rename nobody is told about is a file that quietly stopped matching the transcript beside it. `--only-new` skips that half.
 
 ## The Catalog
@@ -198,7 +202,7 @@ The container idles down after two minutes, so waiting is enough — as long as 
 All stored in `~/.config/plaud/` with 0600 permissions:
 - `token.json` — Plaud auth token and device ID
 - `auth.json` — the Google sign-in for the transcription service (0600; a refresh token is worth the account)
-- `settings.json` — What this person settles about the repositories they work in, chiefly which of their recordings feed which profile
+- `settings.json` — What this person settles about the repositories they work in: which of their recordings feed which profile, and which they have turned down
 - `update-state.json` — Version check cache
 - `cache/transcripts/` — Local transcript cache
 
