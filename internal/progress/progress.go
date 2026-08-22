@@ -3,11 +3,13 @@ package progress
 import (
 	"fmt"
 	"io"
+	"os"
 	"sync/atomic"
 	"time"
 
 	"github.com/vbauerster/mpb/v8"
 	"github.com/vbauerster/mpb/v8/decor"
+	"golang.org/x/term"
 )
 
 // StageDef defines a stage for the progress display.
@@ -68,22 +70,46 @@ func formatElapsed(d time.Duration) string {
 	return fmt.Sprintf("%dm%02ds", int(d.Minutes()), int(d.Seconds())%60)
 }
 
-// Tracker manages the multi-bar progress display.
-type Tracker struct {
+// Tracker reports how far a job has got. There are two, and which one runs is
+// decided by where the output goes: bars redraw themselves and need a terminal
+// to do it, and this command runs unwatched far more often than not, where a
+// bar that cannot redraw prints nothing at all. A transcription is minutes of
+// silence then, with no way to tell a slow run from a hung one.
+type Tracker interface {
+	Update(Event)
+	AddStages([]StageDef)
+	Abort()
+	Wait()
+}
+
+// NewTracker picks the display the output can carry.
+func NewTracker(w io.Writer, stages []StageDef) Tracker {
+	if isTerminal(w) {
+		return newBars(w, stages)
+	}
+	return newLines(w, stages)
+}
+
+func isTerminal(w io.Writer) bool {
+	file, ok := w.(*os.File)
+	return ok && term.IsTerminal(int(file.Fd()))
+}
+
+// bars is the terminal display: one line per stage, redrawn in place.
+type bars struct {
 	p         *mpb.Progress
 	stages    map[string]*stageState
 	startTime time.Time
 	output    io.Writer
 }
 
-// NewTracker creates a progress tracker with the given initial stages.
-func NewTracker(w io.Writer, stages []StageDef) *Tracker {
+func newBars(w io.Writer, stages []StageDef) *bars {
 	p := mpb.New(
 		mpb.WithOutput(w),
 		mpb.WithRefreshRate(100*time.Millisecond),
 	)
 
-	t := &Tracker{
+	t := &bars{
 		p:         p,
 		stages:    make(map[string]*stageState),
 		startTime: time.Now(),
@@ -99,7 +125,7 @@ func NewTracker(w io.Writer, stages []StageDef) *Tracker {
 
 // AddStages appends new stages to the display. Called when the server's
 // init event declares its pipeline stages.
-func (t *Tracker) AddStages(stages []StageDef) {
+func (t *bars) AddStages(stages []StageDef) {
 	for _, s := range stages {
 		if _, exists := t.stages[s.ID]; !exists {
 			t.addBar(s)
@@ -107,7 +133,7 @@ func (t *Tracker) AddStages(stages []StageDef) {
 	}
 }
 
-func (t *Tracker) addBar(def StageDef) {
+func (t *bars) addBar(def StageDef) {
 	st := &stageState{}
 	t.stages[def.ID] = st
 
@@ -155,7 +181,7 @@ func (t *Tracker) addBar(def StageDef) {
 }
 
 // Update processes a progress event and updates the display.
-func (t *Tracker) Update(evt Event) {
+func (t *bars) Update(evt Event) {
 	st, ok := t.stages[evt.Stage]
 	if !ok {
 		return
@@ -217,7 +243,7 @@ func (t *Tracker) Update(evt Event) {
 
 // Abort aborts all incomplete bars so that Wait() won't deadlock.
 // Call this before Wait() in error paths.
-func (t *Tracker) Abort() {
+func (t *bars) Abort() {
 	for _, st := range t.stages {
 		if !st.done.Load() {
 			st.bar.Abort(true)
@@ -226,7 +252,7 @@ func (t *Tracker) Abort() {
 }
 
 // Wait blocks until all bars have completed rendering.
-func (t *Tracker) Wait() {
+func (t *bars) Wait() {
 	t.p.Wait()
 }
 

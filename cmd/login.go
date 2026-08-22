@@ -8,17 +8,15 @@ import (
 	"strings"
 
 	"github.com/spf13/cobra"
-	"golang.org/x/term"
 )
 
 var (
-	tokenFlag         string
-	emailFlag         string
-	passwordFlag      bool
-	passwordStdinFlag bool
-	sendCodeFlag      bool
-	codeFlag          string
-	otpTokenFlag      string
+	tokenFlag    string
+	emailFlag    string
+	passwordFlag bool
+	sendCodeFlag bool
+	codeFlag     string
+	otpTokenFlag string
 )
 
 var loginCmd = &cobra.Command{
@@ -66,7 +64,7 @@ is set in the Plaud app, so those accounts use the code flow.`,
 			otpToken = otpTokenFlag
 		}
 
-		if passwordFlag || passwordStdinFlag || os.Getenv("PLAUD_PASSWORD") != "" {
+		if passwordFlag || os.Getenv("PLAUD_PASSWORD") != "" {
 			return passwordLogin(cmd, email)
 		}
 
@@ -173,29 +171,24 @@ func passwordLogin(cmd *cobra.Command, email string) error {
 	return saveToken(token)
 }
 
-// readPassword takes the password from stdin or an environment variable when
-// one is offered, and otherwise prompts for it without echoing.
+// readPassword takes the password from the environment or from stdin.
+//
+// It is never prompted for. This command runs where nobody is watching far
+// more often than not, and a prompt there is a process that hangs rather than
+// one that says what is missing.
 func readPassword() (string, error) {
 	if env := os.Getenv("PLAUD_PASSWORD"); env != "" {
 		return env, nil
 	}
-	if passwordStdinFlag {
-		data, err := io.ReadAll(os.Stdin)
-		if err != nil {
-			return "", fmt.Errorf("reading password from stdin: %w", err)
-		}
-		return strings.TrimRight(string(data), "\r\n"), nil
-	}
-	if !term.IsTerminal(int(os.Stdin.Fd())) {
-		return "", fmt.Errorf("no terminal to prompt on: pass the password with --password-stdin or PLAUD_PASSWORD")
-	}
-	fmt.Print("Password: ")
-	data, err := term.ReadPassword(int(os.Stdin.Fd()))
-	fmt.Println()
+	data, err := io.ReadAll(os.Stdin)
 	if err != nil {
-		return "", fmt.Errorf("reading password: %w", err)
+		return "", fmt.Errorf("reading the password from stdin: %w", err)
 	}
-	return string(data), nil
+	password := strings.TrimRight(string(data), "\r\n")
+	if password == "" {
+		return "", fmt.Errorf("--password reads the password from stdin or from PLAUD_PASSWORD, and got neither")
+	}
+	return password, nil
 }
 
 func saveToken(token string) error {
@@ -214,8 +207,7 @@ func saveToken(token string) error {
 func init() {
 	loginCmd.Flags().StringVar(&tokenFlag, "token", "", "use an existing access token (e.g. from browser DevTools)")
 	loginCmd.Flags().StringVar(&emailFlag, "email", "", "account email (also read from PLAUD_EMAIL)")
-	loginCmd.Flags().BoolVar(&passwordFlag, "password", false, "authenticate with a password, prompted for")
-	loginCmd.Flags().BoolVar(&passwordStdinFlag, "password-stdin", false, "read the password from stdin")
+	loginCmd.Flags().BoolVar(&passwordFlag, "password", false, "authenticate with a password, read from stdin or PLAUD_PASSWORD")
 	loginCmd.Flags().BoolVar(&sendCodeFlag, "send-code", false, "send the login code and print the handle to finish with")
 	loginCmd.Flags().StringVar(&otpTokenFlag, "otp-token", "", "handle returned by --send-code (also PLAUD_OTP_TOKEN)")
 	loginCmd.Flags().StringVar(&codeFlag, "code", "", "the code that arrived by email (also PLAUD_CODE)")

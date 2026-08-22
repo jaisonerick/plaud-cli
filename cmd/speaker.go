@@ -1,9 +1,8 @@
 package cmd
 
 import (
-	"bufio"
 	"fmt"
-	"os"
+	"strconv"
 	"strings"
 
 	"github.com/jaisonerick/plaud-cli/internal/speaker"
@@ -14,6 +13,7 @@ var (
 	speakerCompany   string
 	renameCompany    string
 	speakerNoSurname bool
+	speakerNewPerson bool
 	renameNoSurname  bool
 	speakerListLong  bool
 )
@@ -39,7 +39,13 @@ names whichever Amanda the person typing had in mind, and the store is shared.
 Anything past the second word is dropped, the company having a field now.
 
 Example:
-  plaud speaker name e348561a6b26d65c9 SPEAKER_01 "Jaison Erick" --company NexaEdge`,
+  plaud speaker name e348561a6b26d65c9 SPEAKER_01 "Jaison Erick" --company NexaEdge
+
+The label is one run's numbering; the id in a transcript's front matter is the
+voice itself, and either works here. A name that resembles somebody already
+known is refused rather than registered, because two spellings of one person
+are two people and only a person can put them back together; --new-person says
+it really is somebody else.`,
 	Args: cobra.ExactArgs(3),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		ctx := cmd.Context()
@@ -66,9 +72,10 @@ Example:
 			existing[i] = p.Name
 		}
 
-		name, err = confirmName(name, existing)
-		if err != nil || name == "" {
-			return err
+		if !speakerNewPerson {
+			if name, err = settleName(name, existing); err != nil {
+				return err
+			}
 		}
 
 		person, err := whisper.NameSpeaker(ctx, recordingID, label, name, speakerCompany, speakerNoSurname)
@@ -186,9 +193,14 @@ func requireFullName(name string, surnameUnknown bool) error {
 	return nil
 }
 
-// confirmName asks before a new spelling of an existing person is created,
-// and returns the name to register, or "" when the operator backs out.
-func confirmName(name string, existing []string) (string, error) {
+// settleName refuses a new spelling of somebody already known.
+//
+// It used to ask, which needed a terminal, and this command runs where nobody
+// is watching far more often than not: a question there is a process that
+// hangs. Refusing costs one retry with the exact name, where the alternative
+// is a second person nobody notices until two halves of the same voice are
+// under two spellings and only a person can put them back.
+func settleName(name string, existing []string) (string, error) {
 	matches := speaker.Similar(name, existing)
 	if len(matches) == 0 {
 		return name, nil
@@ -197,36 +209,20 @@ func confirmName(name string, existing []string) (string, error) {
 		return matches[0].Name, nil
 	}
 
-	fmt.Fprintf(os.Stderr, "%q resembles a name already known:\n", name)
-	for i, m := range matches {
-		fmt.Fprintf(os.Stderr, "  %d) %s\n", i+1, m.Name)
+	var known []string
+	for _, m := range matches {
+		known = append(known, strconv.Quote(m.Name))
 	}
-	fmt.Fprintf(os.Stderr, "  n) keep %q as a new, separate person\n", name)
-	fmt.Fprintf(os.Stderr, "Which is it? [1] ")
-
-	line, err := bufio.NewReader(os.Stdin).ReadString('\n')
-	if err != nil && strings.TrimSpace(line) == "" {
-		// Nobody is at the keyboard, and merging two people on a default is
-		// exactly the mistake this prompt exists to prevent.
-		return "", fmt.Errorf("cannot ask which name is meant with no terminal attached — name it exactly as it is already known")
-	}
-	switch answer := strings.TrimSpace(strings.ToLower(line)); answer {
-	case "":
-		return matches[0].Name, nil
-	case "n":
-		return name, nil
-	default:
-		var choice int
-		if _, err := fmt.Sscanf(answer, "%d", &choice); err != nil || choice < 1 || choice > len(matches) {
-			return "", fmt.Errorf("%q is not one of the options", answer)
-		}
-		return matches[choice-1].Name, nil
-	}
+	return "", fmt.Errorf("%q resembles somebody already known: %s.\n"+
+		"  If it is them, write the name exactly as it is above.\n"+
+		"  If it is somebody else, pass --new-person.",
+		name, strings.Join(known, ", "))
 }
 
 func init() {
 	speakerNameCmd.Flags().StringVar(&speakerCompany, "company", "", "the company this person is from (required)")
 	speakerNameCmd.Flags().BoolVar(&speakerNoSurname, "surname-unknown", false, "record somebody whose surname nobody knows; their company tells them apart")
+	speakerNameCmd.Flags().BoolVar(&speakerNewPerson, "new-person", false, "register the name even though it resembles somebody known")
 	speakerRenameCmd.Flags().StringVar(&renameCompany, "company", "", "the company this person is from (required)")
 	speakerRenameCmd.Flags().BoolVar(&renameNoSurname, "surname-unknown", false, "record somebody whose surname nobody knows")
 	speakerListCmd.Flags().BoolVar(&speakerListLong, "long", false, "show the company and who added each person")
@@ -235,7 +231,6 @@ func init() {
 	speakerCmd.AddCommand(speakerRenameCmd)
 	speakerCmd.AddCommand(speakerForgetCmd)
 	speakerCmd.AddCommand(speakerListCmd)
-	speakerCmd.AddCommand(speakerEnrollCmd)
 	speakerCmd.AddCommand(speakerTeachCmd)
 	rootCmd.AddCommand(speakerCmd)
 }

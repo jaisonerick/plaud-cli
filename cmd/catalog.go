@@ -154,13 +154,12 @@ var catalogStatusCmd = &cobra.Command{
 }
 
 var (
-	catStatus    string
-	catProject   string
-	catTag       string
-	catMinutes   float64
-	catUnfiled   bool
-	catLimit     int
-	catCountOnly bool
+	catStatus  string
+	catProject string
+	catTag     string
+	catMinutes float64
+	catUnfiled bool
+	catLimit   int
 )
 
 var catalogListCmd = &cobra.Command{
@@ -200,10 +199,6 @@ flags here do not reach the question.`,
 			}
 		}
 
-		if catCountOnly {
-			fmt.Println(len(kept))
-			return nil
-		}
 		if jsonOut {
 			out, err := json.MarshalIndent(kept, "", "  ")
 			if err != nil {
@@ -298,7 +293,6 @@ func init() {
 	f.Float64Var(&catMinutes, "min-minutes", 0, "skip recordings shorter than this")
 	f.BoolVar(&catUnfiled, "unfiled", false, "only what nobody has filed or ruled out")
 	f.IntVar(&catLimit, "limit", 0, "stop after this many")
-	f.BoolVar(&catCountOnly, "count", false, "print how many matched, and nothing else")
 
 	catalogCmd.AddCommand(catalogRefreshCmd, catalogStatusCmd, catalogListCmd, catalogSetCmd)
 	rootCmd.AddCommand(catalogCmd)

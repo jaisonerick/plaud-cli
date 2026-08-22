@@ -3,7 +3,6 @@ package cmd
 import (
 	"fmt"
 	"os"
-	"sort"
 	"strings"
 
 	"github.com/jaisonerick/plaud-cli/internal/repo"
@@ -117,35 +116,6 @@ var profileUnsetCmd = &cobra.Command{
 	},
 }
 
-var profileListCmd = &cobra.Command{
-	Use:   "list",
-	Short: "The profiles of this repository, and which of them can select anything",
-	Args:  cobra.NoArgs,
-	RunE: func(cmd *cobra.Command, args []string) error {
-		r, err := repository()
-		if err != nil {
-			return err
-		}
-		names := r.ProfileNames()
-		if len(names) == 0 {
-			fmt.Fprintf(os.Stderr, "No profiles here. %s declares them, and 'plaud profile set' says\n"+
-				"which of your recordings feed each one.\n", repo.FileName)
-			return nil
-		}
-
-		sort.Strings(names)
-		for _, name := range names {
-			profile, _ := r.Profile(name)
-			if profile.Tag == "" {
-				fmt.Printf("%-16s no tag — 'plaud profile set %s --tag \"<your tag>\"'\n", name, name)
-				continue
-			}
-			fmt.Printf("%-16s tag %q (%s)\n", name, profile.Tag, r.Where("profiles."+name+".tag"))
-		}
-		return nil
-	},
-}
-
 // missingTag says what to do about a profile nothing selects for. Reaching the
 // account with no tag is the one failure this split introduces, so it is worth
 // naming rather than answering with an empty list.
@@ -164,6 +134,6 @@ func init() {
 	f.StringVar(&profileName, "name", "", "what these transcripts are called, overriding the repository")
 	f.StringVar(&profileLanguage, "language", "", "the language these recordings are in")
 
-	profileCmd.AddCommand(profileSetCmd, profileUnsetCmd, profileListCmd)
+	profileCmd.AddCommand(profileSetCmd, profileUnsetCmd)
 	rootCmd.AddCommand(profileCmd)
 }

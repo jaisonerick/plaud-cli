@@ -26,7 +26,6 @@ git push --tags
 - `internal/repo/` — What a repository declares about the transcripts it takes in (`.plaud.json`), and what the person running the command settles about it (`~/.config/plaud/settings.json`)
 - `internal/catalog/` — The catalog of recordings a repository keeps (`catalog.jsonl`)
 - `internal/transcript/` — Transcript parsing, formatting (txt/srt/md), search, and filename utilities
-- `internal/ai/` — Claude API integration for ask/summarize commands
 - `internal/modal/` — Modal client for Whisper transcription
 - `services/whisper/` — the Whisper service itself (Python), deployed to Modal
 
@@ -34,7 +33,6 @@ git push --tags
 
 - **Plaud API** (`api.plaud.ai`) — Recording data, transcripts, summaries
 - **Modal** (`modal-whisper` app) — Whisper transcription with speaker diarization. Source: `services/whisper/`. Diarization uses WhisperX's `DiarizationPipeline` (from `whisperx.diarize`), not raw pyannote.
-- **Anthropic Claude** — AI summaries and Q&A (`ANTHROPIC_API_KEY`)
 
 ## Segment Contract
 
@@ -49,9 +47,8 @@ Transcripts (from both Plaud API and Modal Whisper) use a shared segment format.
 ```
 PLAUD_TOKEN            Access token, standing in for token.json entirely
 PLAUD_DEVICE_ID        Device ID sent as x-device-id (derived from the token when unset)
-PLAUD_PASSWORD         Password for `login --password`, instead of the prompt
+PLAUD_PASSWORD         Password for `login --password`, instead of stdin
 PLAUD_API_URL          Override API endpoint
-ANTHROPIC_API_KEY      Claude API key (ask/summarize commands)
 PLAUD_WHISPER_URL      Override the transcription service endpoint
 PLAUD_EMAIL            Non-interactive `login`: email to send the code to
 PLAUD_CODE             Non-interactive `login`: the emailed code
@@ -66,7 +63,7 @@ PLAUD_NO_BROWSER       Print the URL of a page instead of opening a window
 
 Three ways in, in `cmd/login.go`:
 
-- **Password** (`login --password`) posts to `/auth/access-token`. The password is never sent in the clear: `GET /config/security` publishes a secp256k1 public key, and the password is sealed with ECIES before it goes out. `internal/api/crypto.go` implements that scheme and `crypto_test.go` pins it against a vector produced by eciesjs, the library the web client ships. A mismatch there is indistinguishable from a wrong password, so do not change the scheme without re-running those tests.
+- **Password** (`login --password`) posts to `/auth/access-token`. The password is read from `PLAUD_PASSWORD` or from stdin, never prompted for: this command runs unwatched far more often than not, and a prompt there is a process that hangs rather than one that says what is missing. The password is never sent in the clear: `GET /config/security` publishes a secp256k1 public key, and the password is sealed with ECIES before it goes out. `internal/api/crypto.go` implements that scheme and `crypto_test.go` pins it against a vector produced by eciesjs, the library the web client ships. A mismatch there is indistinguishable from a wrong password, so do not change the scheme without re-running those tests.
 - **Email code** (`login`) is the two-step OTP flow, `/auth/otp-send-code` then `/auth/otp-login`. `--send-code` exposes the halves separately, printing the OTP handle so the code can be collected somewhere other than this terminal, and `--otp-token`/`--code` finish it. That is the flow to use when an assistant is running the commands on someone's behalf: a code expires and works once, whereas handing over a password does not.
 - **Existing token** (`login --token`, or `PLAUD_TOKEN`).
 
@@ -81,6 +78,12 @@ The service is shared, and a Google account is the whole of what gets a person i
 Only accounts on the domains in `services/whisper/modal_whisper/auth.py` are served. That list is the entire defence, because the endpoint itself answers anyone who knows the URL: it runs a GPU somebody pays for and writes into a store everyone shares.
 
 `GET /auth/config` is the one route outside the guest list, since a caller needs it before it can have a token. Every other route hangs off a router that carries the check, so a route added later cannot forget it.
+
+## One Way to Do Each Thing
+
+Every command is reachable by one path, and a second path to the same thing is a bug rather than a convenience: the two drift, and whoever reads the output of one is reasoning about what the other did. `fetch` and `sync` are the only ways a transcript reaches disk; `audio` is the only way the sound does; `speaker identify` and `speaker name` are the same registration, one with a page and one without.
+
+**Assume there is no terminal.** This is driven by something else far more often than by a person, so nothing prompts and nothing escalates to `sudo`. A choice that cannot be made without asking is refused with the command that would settle it, and progress is written as plain lines when the output is not a terminal, because a bar that cannot redraw prints nothing at all and a transcription is then minutes of silence with no way to tell a slow run from a hung one. `internal/progress` picks between the two by looking at where the output goes.
 
 ## What a Repository Declares
 
@@ -109,7 +112,7 @@ Three layers, general to specific: `defaults` in those settings, then the reposi
 
 The description is composed rather than chosen. The repository's document holds the project's people and how their names are spelt; `--context` on the call holds who was in this room. They know different things, so one is added to the other. `--context-file` is the exception, standing in for the document entirely, which is how a recording described by a paper of its own is fetched.
 
-`transcript` falls back to the repository's document when neither flag is passed, and a run that only settles the names in files already on disk needs no description at all, because it decodes nothing.
+`fetch` falls back to the repository's document when neither flag is passed, and a run that only settles the names in files already on disk needs no description at all, because it decodes nothing.
 
 `plaud sync` does the same errand for every recording a tag selects, and a profile names both where those recordings are filed and the tag that selects them, so `--profile cerc` is the whole instruction. A profile whose tag nobody set is refused rather than run: without one, the filter selects the entire account. What says a recording is already here is the file at the destination the same rules produce, which is why running it twice decodes nothing.
 
@@ -131,11 +134,11 @@ There is no index to build. The catalog is read whole and filtered in `catalog l
 
 A transcription that separates a voice nobody knows says so, and leaves it there: putting a person to a voice needs somebody who was in the room, so it is a thing to be told about rather than a step to walk a caller through. `plaud speaker identify` is where that is done.
 
-`transcript` is the one way to get the text of a recording, and the transcription service is the one place it comes from. Plaud's own transcript is never used, even where the account has one: it carries no voice, so a file written from it could never have a name corrected, and every recording taken that way would sit outside speaker recognition forever. **A transcription is made once.** The service keeps what it decoded, and a recording that has been through it comes back in seconds rather than through a GPU; `--force` is what decodes it again, and it is the one thing about a transcription only a caller can decide, because only a caller knows the transcript on record is one to throw away.
+`fetch` is the one way to get the text of a recording, and the transcription service is the one place it comes from. Plaud's own transcript is never used, even where the account has one: it carries no voice, so a file written from it could never have a name corrected, and every recording taken that way would sit outside speaker recognition forever. **A transcription is made once.** The service keeps what it decoded, and a recording that has been through it comes back in seconds rather than through a GPU; `--force` is what decodes it again, and it is the one thing about a transcription only a caller can decide, because only a caller knows the transcript on record is one to throw away.
 
 Deciding otherwise costs more than the minutes. Transcribing again separates the voices afresh, so the labels are renumbered and every transcript written from the run before points at voices that no longer exist.
 
-What is kept holds the label of each voice, never the person: who a label is comes from the people known on the day it is handed over, so a name settled after a recording was transcribed reaches the transcript of it. **The text of a meeting now lives on the shared service**, readable by anyone signed in on the domains it serves, which is a wider audience than the machine that asked for it. `download` only ever copies a file that exists, which leaves it the audio and the summary.
+What is kept holds the label of each voice, never the person: who a label is comes from the people known on the day it is handed over, so a name settled after a recording was transcribed reaches the transcript of it. **The text of a meeting now lives on the shared service**, readable by anyone signed in on the domains it serves, which is a wider audience than the machine that asked for it. `audio` only ever copies the sound file, which is what is left to fetch without decoding anything.
 
 Which engine ran is not a choice a caller makes, and the CLI does not offer one. Neither are the stages: no flag turns off diarization, polishing, recognition or compaction. The tool exists to finish a transcript, and a caller weighing whether to run one of those is being asked to price the tool rather than use it.
 
@@ -143,9 +146,9 @@ A description is required to decode: `--context` is it written out, `--context-f
 
 A context that does not name the people and companies in the recording is worse than a short one that does: the polisher writes a company it half-heard into a name it recognises from what it was given, so a briefing about other clients turns a real name into theirs.
 
-Both take one recording by id, or every recording a filter keeps. `download` skips what is already on disk unless `--force` says otherwise. The output directory is the record of what has been done, so there is no state file to go stale. `internal/transcript` names the file, and the same name is what makes the skip work.
+`fetch` takes one recording by id and `sync` every recording a profile or a filter keeps. What is already on disk is the record of what has been done, so there is no state file to go stale.
 
-`transcript` does not skip a file it finds: it settles again who the voices in it are. A voice named after a transcript was written leaves that transcript calling somebody SPEAKER_03 forever, and nothing else would fix it, since the text lives only in that file.
+Neither skips a file it finds: they settle again who the voices in it are. A voice named after a transcript was written leaves that transcript calling somebody SPEAKER_03 forever, and nothing else would fix it, since the text lives only in that file.
 
 **A name is a rendering; the id is the record.** A markdown transcript carries, in its front matter, which voice each name in it stands for: `"Jaison Erick (NexaEdge)": [v_7f3a91]`. `POST /speakers/{id}/whois` takes those ids, finds the embedding each one was stored with and answers who it is against the people known today. No audio is fetched and nothing is decoded. What it costs is one request.
 
@@ -159,7 +162,7 @@ Nothing the caller knows about a recording reaches the decoder. Whisper reads a 
 
 A recording that holds no speech is refused rather than transcribed. The batched decoder never applies the fallback the sequential one does, so a window the voice detector kept by mistake comes back as a confident sentence: six seconds of a microphone being put down decoded as "Thank you." at -0.69, where speech sits around -0.1. `services/whisper/modal_whisper/speech.py` drops a window below the decoder's own floor and, for a recording holding almost no speech at all, refuses the lot. Nothing is written and no voice is stored, which matters more than the text: a voice print of room tone is nameable, and would then claim somebody in every transcription. A meeting is never judged this way, because its hard passages are hard rather than imagined.
 
-`--json` on `transcript` prints one object per recording: where it landed, whether anything was written, whether the text was decoded or handed back, and the language vote as numbers. That last part is why it exists. A recording that opens in silence has its language decided by whatever the samples heard, and Whisper renders rather than mis-spells when it decides wrong, so the file is fluent and entire in a language nobody spoke. A person reads the warning; a routine needs `agreement` and `samples` to refuse the file on its own.
+`--json` prints one object per recording: where it landed, whether anything was written, whether the text was decoded or handed back, and the language vote as numbers. That last part is why it exists. A recording that opens in silence has its language decided by whatever the samples heard, and Whisper renders rather than mis-spells when it decides wrong, so the file is fluent and entire in a language nobody spoke. A person reads the warning; a routine needs `agreement` and `samples` to refuse the file on its own.
 
 `--language` settles what a recording is in, and settling it is also a statement that a transcript on record came back in the wrong one: the service decodes again rather than hand back what it has in a language nobody asked for.
 
@@ -167,9 +170,9 @@ A recording with no `--language` has its language voted on by samples taken acro
 
 Polishing is an LLM pass over a text that is read afterwards as a quotation, and nothing in a request for spelling and punctuation stops a model returning a summary, half a sentence, or a line of its own training data. `services/whisper/modal_whisper/polish_guard.py` judges every corrected segment against what was transcribed, and a segment it refuses stands as transcribed. A chunk whose answer carries no segments at all is a failed call rather than a verdict on the speech, so it is asked once more before its segments are left alone. The two reach the polish progress line and the CLI as separate counts, because a run whose corrections were thrown away otherwise looks exactly like one that needed none, and a stretch of a meeting nobody polished looks exactly like a correction the guard declined.
 
-Speaker recognition only matches against voices already learned, and so needs nobody present. Teaching a new voice is the part that needs a person: `speaker name` for one, `speaker enroll` for a library's worth.
+Speaker recognition only matches against voices already learned, and so needs nobody present. Teaching a new voice is the part that needs a person: `speaker identify` is the page for it, and `speaker name` the same registration without one.
 
-The GPU container is scaled to zero between jobs, so every run pays a cold start before its first stage reports, and `transcript` says how many recordings it is about to send before the first one starts.
+The GPU container is scaled to zero between jobs, so every run pays a cold start before its first stage reports, and `sync` says how many recordings it is about to send before the first one starts.
 
 ## Speaker Recognition
 
@@ -187,10 +190,9 @@ No voice ever leaves the service. An embedding that travelled would put people w
 - `speaker identify` opens a page that plays the stretches where each unnamed voice is speaking and takes the name, offering the people already known as you type. Each name is registered the moment it is typed rather than at the end, so a tab closed halfway leaves the voices already named named; when the page is finished the transcripts are rewritten. `internal/identify` holds the scan, the server and the page. `PLAUD_NO_BROWSER` stops it opening a window, for a run driven from somewhere else.
 - `speaker name <recording-id> <key> "First Last" --company X` says who one of the voices is, keyed by voice id or by label. It is the same call the page makes.
 - `speaker teach <recording-id> --ranges file.json` learns from stretches somebody chose, one sample per person. A label that holds two voices is the average of both, so naming it whole teaches neither, and that speech is lost to the recogniser until it is cut apart.
-- `speaker enroll` learns from the Plaud transcripts that name their speakers in full, and leaves out whoever they name by a first name alone. Nothing mechanical turns "Tom" into Antonio Colombo, and there is no longer a dictionary that would: one person has one name. Whoever is left out is named from a recording instead, and is recognised by voice from then on however the transcript spelt them.
 - `speaker rename` corrects who somebody is, carrying their voices; `speaker forget` drops a person learned wrongly, which otherwise keeps claiming somebody else's voice in every transcription.
 
-Enrollment embeds with the model the diarization pipeline itself uses (`services/whisper/modal_whisper/embed.py`). Under any other model, enrolled and diarized voices land in different spaces, where nothing ever matches and nothing ever reports an error.
+A voice is embedded with the model the diarization pipeline itself uses (`services/whisper/modal_whisper/embed.py`). Under any other model, a learned voice and a diarized one land in different spaces, where nothing ever matches and nothing ever reports an error.
 
 `fold` exists twice, in `internal/speaker/names.go` and `services/whisper/modal_whisper/speaker_store.py`, and the two must agree: one decides what name to offer, the other what is stored, and a disagreement is a person who cannot be found under the name they were saved with. Both are tested against the same cases.
 
@@ -209,5 +211,4 @@ All stored in `~/.config/plaud/` with 0600 permissions:
 - `auth.json` — the Google sign-in for the transcription service (0600; a refresh token is worth the account)
 - `settings.json` — What this person settles about the repositories they work in: which of their recordings feed which profile, and which they have turned down
 - `update-state.json` — Version check cache
-- `cache/transcripts/` — Local transcript cache
 

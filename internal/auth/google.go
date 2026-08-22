@@ -4,18 +4,13 @@ package auth
 
 import (
 	"context"
-	"crypto/rand"
-	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
-	"net"
 	"net/http"
 	"net/url"
 	"os"
-
-	"github.com/jaisonerick/plaud-cli/internal/browser"
 	"path/filepath"
 	"strings"
 	"time"
@@ -279,112 +274,6 @@ func exchange(ctx context.Context, cfg *Config, form url.Values) (*tokenResponse
 	return &body, nil
 }
 
-// SignIn opens a browser, waits for Google to come back, and returns the
-// session it established.
-func SignIn(ctx context.Context, cfg *Config, w io.Writer) (*Session, error) {
-	verifier, err := randomString(64)
-	if err != nil {
-		return nil, err
-	}
-	sum := sha256.Sum256([]byte(verifier))
-	challenge := base64.RawURLEncoding.EncodeToString(sum[:])
-
-	state, err := randomString(16)
-	if err != nil {
-		return nil, err
-	}
-
-	listener, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		return nil, fmt.Errorf("opening a port for Google to answer on: %w", err)
-	}
-	defer listener.Close()
-	redirect := fmt.Sprintf("http://127.0.0.1:%d/", listener.Addr().(*net.TCPAddr).Port)
-
-	scopes := scopesOf(cfg)
-	query := url.Values{
-		"client_id":     {cfg.ClientID},
-		"redirect_uri":  {redirect},
-		"response_type": {"code"},
-		"scope":         {strings.Join(scopes, " ")},
-		"state":         {state},
-		// Without both of these Google returns no refresh token, and every
-		// command would reopen the browser.
-		"access_type":           {"offline"},
-		"prompt":                {"consent"},
-		"code_challenge":        {challenge},
-		"code_challenge_method": {"S256"},
-	}
-	authURL := cfg.AuthURI + "?" + query.Encode()
-
-	code, err := awaitRedirect(ctx, listener, state, authURL, w)
-	if err != nil {
-		return nil, err
-	}
-
-	body, err := exchange(ctx, cfg, url.Values{
-		"grant_type":    {"authorization_code"},
-		"code":          {code},
-		"redirect_uri":  {redirect},
-		"code_verifier": {verifier},
-	})
-	if err != nil {
-		return nil, err
-	}
-	if body.RefreshToken == "" {
-		return nil, fmt.Errorf("Google returned no refresh token, so this would ask again every time")
-	}
-
-	return &Session{Email: emailIn(body.IDToken), RefreshToken: body.RefreshToken}, nil
-}
-
-// awaitRedirect serves the one request Google sends back.
-func awaitRedirect(ctx context.Context, listener net.Listener, state, authURL string, w io.Writer) (string, error) {
-	type result struct {
-		code string
-		err  error
-	}
-	done := make(chan result, 1)
-
-	server := &http.Server{Handler: http.HandlerFunc(func(rw http.ResponseWriter, r *http.Request) {
-		query := r.URL.Query()
-		rw.Header().Set("Content-Type", "text/html; charset=utf-8")
-
-		if got := query.Get("state"); got != state {
-			http.Error(rw, "That sign-in did not come from this terminal.", http.StatusBadRequest)
-			done <- result{err: fmt.Errorf("the answer came back with the wrong state")}
-			return
-		}
-		if failure := query.Get("error"); failure != "" {
-			fmt.Fprintf(rw, "<p>Sign-in failed: %s. You can close this tab.</p>", failure)
-			done <- result{err: fmt.Errorf("Google reported %q", failure)}
-			return
-		}
-		code := query.Get("code")
-		if code == "" {
-			http.Error(rw, "No authorization code came back.", http.StatusBadRequest)
-			done <- result{err: fmt.Errorf("no authorization code came back")}
-			return
-		}
-		fmt.Fprint(rw, "<p>Signed in. You can close this tab and return to the terminal.</p>")
-		done <- result{code: code}
-	})}
-	go func() { _ = server.Serve(listener) }()
-	defer server.Close()
-
-	fmt.Fprintf(w, "Opening your browser to sign in with Google.\nIf it does not open, visit:\n\n%s\n\n", authURL)
-	browser.Open(authURL)
-
-	select {
-	case r := <-done:
-		return r.code, r.err
-	case <-ctx.Done():
-		return "", ctx.Err()
-	case <-time.After(5 * time.Minute):
-		return "", fmt.Errorf("gave up waiting for the sign-in to finish")
-	}
-}
-
 // emailIn reads the address out of an ID token, for showing who signed in.
 // Nothing is decided on this: the service checks the signature itself.
 func emailIn(idToken string) string {
@@ -403,12 +292,4 @@ func emailIn(idToken string) string {
 		return ""
 	}
 	return claims.Email
-}
-
-func randomString(n int) (string, error) {
-	buf := make([]byte, n)
-	if _, err := rand.Read(buf); err != nil {
-		return "", err
-	}
-	return base64.RawURLEncoding.EncodeToString(buf), nil
 }

@@ -6,7 +6,6 @@ import (
 	"io"
 	"net/http"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strconv"
@@ -126,21 +125,22 @@ func notifyUpdate(current, latest string) {
 // Windows refuses to overwrite a file that is running, but it will rename one:
 // the running program keeps its handle and the name is freed for the new
 // binary. What is moved aside is deleted by the next run, which is the first
-// moment nothing holds it. Elsewhere a rename is enough, except for a path
-// only root can write, and that is what sudo is for.
+// moment nothing holds it. Elsewhere a rename is enough.
+//
+// A path only root can write is said out loud rather than escalated to. sudo
+// asks for a password on a terminal, and there is usually no terminal here: a
+// command run by something else would sit waiting for an answer nobody is
+// there to give, which reads as a hang rather than as a permission problem.
 func replaceBinary(execPath, tmpPath string, rename func(string, string) error) error {
 	if err := rename(tmpPath, execPath); err == nil {
 		return nil
 	}
 
 	if runtime.GOOS != "windows" {
-		sudoCmd := exec.Command("sudo", "cp", tmpPath, execPath)
-		sudoCmd.Stdin, sudoCmd.Stdout, sudoCmd.Stderr = os.Stdin, os.Stdout, os.Stderr
-		if err := sudoCmd.Run(); err != nil {
-			return fmt.Errorf("replacing the binary, even with sudo: %w", err)
-		}
 		os.Remove(tmpPath)
-		return nil
+		return fmt.Errorf("cannot write %s. Install it somewhere of your own instead:\n"+
+			"  the release is at https://github.com/jaisonerick/plaud-cli/releases/latest\n"+
+			"  or point PLAUD_BIN at a copy you can write", execPath)
 	}
 
 	return replaceByMovingAside(execPath, tmpPath, rename)

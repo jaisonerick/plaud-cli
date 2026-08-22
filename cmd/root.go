@@ -58,6 +58,9 @@ func Execute() {
 }
 
 func init() {
+	// Shell completion is a terminal's business, and this runs without one
+	// almost always. Hiding it keeps the list to what a caller can act on.
+	rootCmd.CompletionOptions.HiddenDefaultCmd = true
 	rootCmd.PersistentFlags().BoolVar(&debug, "debug", false, "dump raw JSON to stderr")
 	rootCmd.PersistentFlags().BoolVar(&jsonOut, "json", false, "output as JSON")
 }

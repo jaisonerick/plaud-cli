@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"slices"
 	"strings"
 
 	"github.com/jaisonerick/plaud-cli/internal/auth"
@@ -44,14 +45,6 @@ shown immediately, and the outcome when the sign-in finishes.`,
 			return err
 		}
 
-		if authBrowser {
-			session, err := auth.SignIn(ctx, cfg, os.Stderr)
-			if err != nil {
-				return err
-			}
-			return finishLogin(session, cfg)
-		}
-
 		pending, err := auth.StartDevice(ctx, cfg)
 		if err != nil {
 			return err
@@ -59,7 +52,7 @@ shown immediately, and the outcome when the sign-in finishes.`,
 
 		// Printed and flushed before the wait, because whoever is watching this
 		// output has to act on it for the wait to ever end.
-		if authJSON {
+		if jsonOut {
 			emit(map[string]any{
 				"status":           "pending",
 				"user_code":        pending.UserCode,
@@ -73,7 +66,7 @@ shown immediately, and the outcome when the sign-in finishes.`,
 
 		session, err := auth.AwaitDevice(ctx, cfg, pending)
 		if err != nil {
-			if authJSON {
+			if jsonOut {
 				emit(map[string]any{"status": "failed", "error": err.Error()})
 			}
 			return err
@@ -89,9 +82,9 @@ func finishLogin(session *auth.Session, cfg *auth.Config) error {
 	}
 
 	domain := domainOf(session.Email)
-	served := len(cfg.Domains) == 0 || contains(cfg.Domains, domain)
+	served := len(cfg.Domains) == 0 || slices.Contains(cfg.Domains, domain)
 
-	if authJSON {
+	if jsonOut {
 		emit(map[string]any{"status": "signed-in", "email": session.Email, "served": served})
 	} else {
 		fmt.Printf("Signed in as %s\n", session.Email)
@@ -169,15 +162,7 @@ func domainOf(email string) string {
 	return domain
 }
 
-var (
-	authJSON    bool
-	authBrowser bool
-)
-
 func init() {
-	authLoginCmd.Flags().BoolVar(&authJSON, "json", false, "print the code and the outcome as JSON, one object per line")
-	authLoginCmd.Flags().BoolVar(&authBrowser, "browser", false, "sign in through a browser on this machine instead")
-
 	authCmd.AddCommand(authLoginCmd)
 	authCmd.AddCommand(authStatusCmd)
 	authCmd.AddCommand(authLogoutCmd)

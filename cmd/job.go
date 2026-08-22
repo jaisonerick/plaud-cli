@@ -5,157 +5,16 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
-	"path/filepath"
 	"sort"
 	"strings"
 
 	"github.com/jaisonerick/plaud-cli/internal/api"
 	"github.com/jaisonerick/plaud-cli/internal/modal"
 	"github.com/jaisonerick/plaud-cli/internal/transcript"
-	"github.com/spf13/cobra"
 )
 
-var (
-	trFilter      recordingFilter
-	trAll         bool
-	trForce       bool
-	trOutputDir   string
-	trFormat      string
-	trContext     string
-	trContextFile string
-	trLanguage    string
-	trInto        string
-	trOpts        modal.TranscribeOpts
-)
-
-var transcriptCmd = &cobra.Command{
-	Use:     "transcript [id]",
-	Aliases: []string{"transcribe"},
-	Short:   "Write the transcript of a recording, or of many",
-	Long: `Put the text of a recording on disk.
-
-One of --context or --context-file is required. --context-file reads a file
-describing the recording — an agenda, prep notes, a briefing; --context takes
-that description written out. It is what settles how the names in it are
-spelt, and transcripts of the same people drift apart without it. A document covering the whole engagement serves every
-recording in it: what the polisher reads out of it is who the people are and
-how their names and systems are spelt, which the subject of one meeting
-barely changes.
-
-A transcript that already exists is reused. --force transcribes the audio
-again, which is what to reach for when the one on record is an old one.
-
-A transcript already written here is not skipped: the file keeps the id of each
-voice in it, so a name settled since replaces the one written at the time. That
-is a lookup and a comparison of voices already on the service — no audio is
-fetched and nothing is decoded.
-
-Naming a recording does one. A filter, or --all, does every recording it keeps.
-
---into writes one recording to exactly that file, whatever it is called, and
-refreshes the names in it when it is already there.
-
-Examples:
-  plaud transcript abc123 --context-file ./meeting-prep.md
-  plaud transcript abc123 --context "Vexia and CERC on payments; Éricles Bento, Zeni"
-  plaud transcript abc123 --context-file ./prep.md --force
-  plaud transcript --since 2026-08-01 --context-file ./briefing.md --output-dir ./recordings
-  plaud transcript --tag cliente --context-file ./briefing.md --format srt`,
-	Args: cobra.MaximumNArgs(1),
-	RunE: func(cmd *cobra.Command, args []string) error {
-		ctx := cmd.Context()
-
-		if err := validateFormat(trFormat); err != nil {
-			return err
-		}
-		outputDir := trOutputDir
-		if trInto != "" {
-			outputDir = filepath.Dir(trInto)
-		}
-		if err := os.MkdirAll(outputDir, 0755); err != nil {
-			return fmt.Errorf("creating output directory: %w", err)
-		}
-
-		// Before anything is fetched: a context that cannot be read is worth
-		// saying so about while it still costs nothing.
-		contextDoc, err := readContext(trContext, trContextFile)
-		if err != nil {
-			return err
-		}
-		if contextDoc == "" {
-			if contextDoc, err = declaredContext(); err != nil {
-				return err
-			}
-		}
-		trOpts.ContextDoc = contextDoc
-		trOpts.Language = trLanguage
-		trOpts.Force = trForce
-		how := filing{format: trFormat, force: trForce, opts: trOpts}
-
-		recordings, err := chooseRecordings(ctx, args, trFilter, trAll)
-		if err != nil {
-			return err
-		}
-		if len(recordings) == 0 {
-			fmt.Fprintln(os.Stderr, "No recordings matched.")
-			return nil
-		}
-
-		if trInto != "" && len(recordings) > 1 {
-			return fmt.Errorf("--into names one file, and this matched %d recordings", len(recordings))
-		}
-
-		pending := plan(recordings, how)
-
-		// Resolve the service once: a missing credential should fail before
-		// the first recording rather than once per recording.
-		whisper, err := whisperClient()
-		if err != nil {
-			return err
-		}
-
-		var toWrite int
-		for _, job := range pending {
-			if !job.written {
-				toWrite++
-			}
-		}
-		// A run that only settles the names in files already here decodes
-		// nothing, so there is nothing for a description to spell.
-		if toWrite > 0 && contextDoc == "" {
-			return fmt.Errorf("%s", noDescription)
-		}
-		if toWrite > 1 {
-			fmt.Fprintf(os.Stderr, "Transcribing %d recording(s); the %d already on disk have their voices checked against the audio.\n", toWrite, len(pending)-toWrite)
-		}
-
-		var wrote, failed int
-		for _, job := range pending {
-			if !job.written && len(pending) > 1 {
-				fmt.Fprintf(os.Stderr, "\n%s\n", job.recording.Name)
-			}
-			if err := job.run(ctx, whisper); err != nil {
-				fmt.Fprintf(os.Stderr, "Error on %s: %v\n", job.recording.Name, err)
-				failed++
-				continue
-			}
-			if !job.written {
-				wrote++
-			}
-		}
-
-		if len(pending) > 1 {
-			fmt.Fprintf(os.Stderr, "\n%d written, %d already on disk, %d failed\n", wrote, len(pending)-toWrite, failed)
-		}
-		if failed > 0 {
-			return fmt.Errorf("%d recording(s) failed", failed)
-		}
-		return nil
-	},
-}
-
-// report is what a run of this command says to whatever called it, and the
-// only shape a routine should read. The line a person reads says the same
+// report is what bringing in one recording says to whatever called it, and
+// the only shape a routine should read. The line a person reads says the same
 // things in prose, but a routine deciding whether to file a transcript needs
 // the language vote as numbers: a meeting that opened in silence comes back
 // translated, fluently and with nothing in the file to say a choice was made.
@@ -219,21 +78,6 @@ type job struct {
 	// alone says this is the only recording asked for, and so the one case
 	// where a run that changes nothing still owes an answer.
 	alone bool
-}
-
-// plan puts each recording next to the file it belongs in. A transcript
-// already on disk is not skipped: its text is settled, but a voice named after
-// it was written is still called SPEAKER_03 in it.
-func plan(recordings []api.RecordingSimple, how filing) []job {
-	var pending []job
-	for _, r := range recordings {
-		dest := filepath.Join(trOutputDir, transcript.BaseName(r.Name, r.StartTime)+transcript.Ext(how.format))
-		if trInto != "" {
-			dest = trInto
-		}
-		pending = append(pending, newJob(r, dest, how, len(recordings) == 1))
-	}
-	return pending
 }
 
 // newJob settles whether the file is already there, which is the difference
@@ -519,26 +363,4 @@ func readContext(text, path string) (string, error) {
 		return "", fmt.Errorf("%q is a file that exists, and --context is the description itself — pass --context-file to read it", text)
 	}
 	return text, nil
-}
-
-// must fails the build of a command rather than the run of it: a flag that
-// cannot be marked required is a mistake in this file, not in a call.
-func must(err error) {
-	if err != nil {
-		panic(err)
-	}
-}
-
-func init() {
-	f := transcriptCmd.Flags()
-	addFilterFlags(transcriptCmd, &trFilter)
-	f.BoolVar(&trAll, "all", false, "every recording in the account")
-	f.BoolVar(&trForce, "force", false, "transcribe the audio again instead of reusing a transcript that exists")
-	f.StringVar(&trOutputDir, "output-dir", ".", "where the transcripts are written")
-	f.StringVar(&trInto, "into", "", "write one recording to exactly this file, refreshing the names when it is there")
-	f.StringVar(&trFormat, "format", "md", "output format: json, txt, srt, md")
-	f.StringVar(&trLanguage, "language", "", "force a language code (e.g. pt, en), empty to detect it")
-	f.StringVar(&trContext, "context", "", "what the recording is about, written out; settles how names are spelt")
-	f.StringVar(&trContextFile, "context-file", "", "a file describing the recording, read as the context")
-	rootCmd.AddCommand(transcriptCmd)
 }

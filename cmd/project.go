@@ -97,6 +97,14 @@ named on the call, and nothing here says where they belong.`,
 			fmt.Fprintf(os.Stderr, "\nNo %s at or above %s. A transcript can still be fetched into a path\n"+
 				"named on the call, and nothing declares where one belongs here.\n", repo.FileName, r.Root)
 		}
+		// A profile nobody has pointed at their own recordings selects
+		// nothing, and the JSON says so only to whoever knows to look.
+		for _, name := range r.ProfileNames() {
+			if profile, _ := r.Profile(name); profile.Tag == "" {
+				fmt.Fprintf(os.Stderr, "\nThe profile %q does not say which of your recordings it selects:\n"+
+					"  plaud profile set %s --tag \"<the tag in your Plaud>\"\n", name, name)
+			}
+		}
 		return nil
 	},
 }
