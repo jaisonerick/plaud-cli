@@ -40,20 +40,42 @@ type Config struct {
 	UTCOffset     *int
 	Profiles      map[string]Profile
 
+	// Identity is what names this repository in a person's own settings, and
+	// Settings is where those settings live. Both are printed rather than
+	// looked up, so somebody wondering which entry governs them can see it.
+	Identity string
+	Settings string
+
 	// Unknown names the keys the file carries that nothing here reads, so a
 	// misspelt key is reported rather than silently ignored.
 	Unknown []string
+
+	// from records which layer settled each key, so `config` can say why a
+	// value is what it is instead of leaving somebody to guess.
+	from map[string]string
 }
+
+// Where names the layer that settled a key: the repository, the person's
+// settings for it, or the defaults they carry everywhere.
+func (c *Config) Where(key string) string {
+	if c.from == nil {
+		return ""
+	}
+	return c.from[key]
+}
+
+// Sources is every key some layer settled, and which one did.
+func (c *Config) Sources() map[string]string { return c.from }
 
 // Profile is a set of recordings this repository takes in the same way: the
 // tag that selects them, and whatever it overrides about where they land.
 type Profile struct {
-	Tag         string            `json:"tag"`
-	Dest        string            `json:"dest"`
-	Name        string            `json:"name"`
-	Language    string            `json:"language"`
-	Context     string            `json:"context"`
-	FrontMatter map[string]string `json:"front_matter"`
+	Tag         string            `json:"tag,omitempty"`
+	Dest        string            `json:"dest,omitempty"`
+	Name        string            `json:"name,omitempty"`
+	Language    string            `json:"language,omitempty"`
+	Context     string            `json:"context,omitempty"`
+	FrontMatter map[string]string `json:"front_matter,omitempty"`
 }
 
 // declared mirrors the file. It is separate from Config so that reading it
@@ -86,10 +108,17 @@ func Find(dir string) (*Config, error) {
 		return nil, err
 	}
 
+	root, file := gitRoot(dir, dir), ""
+	var declared *Layer
+	var unknown []string
 	for at := dir; ; {
-		file := filepath.Join(at, FileName)
-		if _, err := os.Stat(file); err == nil {
-			return read(file, at)
+		candidate := filepath.Join(at, FileName)
+		if _, err := os.Stat(candidate); err == nil {
+			if declared, unknown, err = read(candidate); err != nil {
+				return nil, err
+			}
+			root, file = at, candidate
+			break
 		}
 		parent := filepath.Dir(at)
 		if parent == at {
@@ -97,41 +126,49 @@ func Find(dir string) (*Config, error) {
 		}
 		at = parent
 	}
-	return &Config{Root: gitRoot(dir, dir)}, nil
-}
 
-func read(file, root string) (*Config, error) {
-	data, err := os.ReadFile(file)
+	settings, err := LoadSettings()
 	if err != nil {
-		return nil, fmt.Errorf("reading %s: %w", file, err)
-	}
-
-	var d declared
-	if err := json.Unmarshal(data, &d); err != nil {
-		return nil, fmt.Errorf("%s is not valid JSON: %w", file, err)
+		return nil, err
 	}
 
 	c := &Config{
-		Root:          root,
-		File:          file,
-		Filing:        d.Filing,
-		Language:      d.Language,
-		Dest:          d.Dest,
-		Name:          d.Name,
-		FrontMatter:   d.FrontMatter,
-		ExcludeTags:   d.ExcludeTags,
-		ExcludeReason: d.ExcludeReason,
-		UTCOffset:     d.UTCOffset,
-		Profiles:      d.Profiles,
-		Unknown:       unknownKeys(data, d),
+		Root: root, File: file, Unknown: unknown,
+		Identity: Identity(root), Settings: settings.Path(),
+		from: map[string]string{},
 	}
-	c.Context = c.Abs(d.Context)
-	c.Scratch = c.Abs(d.Scratch)
-	c.Hub = c.Abs(d.Hub)
+
+	// Three layers, general to specific: what this person carries everywhere,
+	// what the repository declares, and what they set about this repository.
+	// The last wins because it is the most specific and they wrote it here.
+	c.apply(settings.Defaults, "your defaults")
+	c.apply(declared, "repository")
+	c.apply(settings.For(c.Identity, false), "your settings for this repository")
+
 	if c.ExcludeReason == "" {
 		c.ExcludeReason = "excluded-by-config"
 	}
 	return c, nil
+}
+
+// read takes the repository's declaration as a layer, with its paths still
+// relative: resolving them belongs to the merge, which knows the root.
+func read(file string) (*Layer, []string, error) {
+	data, err := os.ReadFile(file)
+	if err != nil {
+		return nil, nil, fmt.Errorf("reading %s: %w", file, err)
+	}
+
+	var d declared
+	if err := json.Unmarshal(data, &d); err != nil {
+		return nil, nil, fmt.Errorf("%s is not valid JSON: %w", file, err)
+	}
+	return &Layer{
+		Context: d.Context, Filing: d.Filing, Scratch: d.Scratch, Hub: d.Hub,
+		Language: d.Language, Dest: d.Dest, Name: d.Name, FrontMatter: d.FrontMatter,
+		ExcludeTags: d.ExcludeTags, ExcludeReason: d.ExcludeReason,
+		UTCOffset: d.UTCOffset, Profiles: d.Profiles,
+	}, unknownKeys(data, d), nil
 }
 
 // unknownKeys names what the file carries and nothing reads. A key nobody

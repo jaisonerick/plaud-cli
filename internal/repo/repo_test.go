@@ -18,6 +18,7 @@ func write(t *testing.T, path, content string) {
 }
 
 func TestTheDeclarationIsFoundFromAnywhereBelowIt(t *testing.T) {
+	alone(t, "")
 	root := t.TempDir()
 	write(t, filepath.Join(root, FileName), `{"context": "docs/briefing.md"}`)
 	deep := filepath.Join(root, "a", "b", "c")
@@ -39,6 +40,7 @@ func TestTheDeclarationIsFoundFromAnywhereBelowIt(t *testing.T) {
 }
 
 func TestTheNearestDeclarationWins(t *testing.T) {
+	alone(t, "")
 	root := t.TempDir()
 	inner := filepath.Join(root, "client")
 	write(t, filepath.Join(root, FileName), `{"filing": "outer.md"}`)
@@ -55,6 +57,7 @@ func TestTheNearestDeclarationWins(t *testing.T) {
 }
 
 func TestADirectoryDeclaringNothingIsNotAnError(t *testing.T) {
+	alone(t, "")
 	c, err := Find(t.TempDir())
 	if err != nil {
 		t.Fatal(err)
@@ -68,6 +71,7 @@ func TestADirectoryDeclaringNothingIsNotAnError(t *testing.T) {
 }
 
 func TestAKeyNobodyReadsIsReported(t *testing.T) {
+	alone(t, "")
 	root := t.TempDir()
 	write(t, filepath.Join(root, FileName), `{"filing": "f.md", "contexto": "x.md", "hubb": "y"}`)
 
@@ -82,6 +86,7 @@ func TestAKeyNobodyReadsIsReported(t *testing.T) {
 }
 
 func TestBadJSONSaysWhichFile(t *testing.T) {
+	alone(t, "")
 	root := t.TempDir()
 	write(t, filepath.Join(root, FileName), `{"filing":`)
 

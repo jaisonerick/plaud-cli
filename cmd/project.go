@@ -37,13 +37,18 @@ func repository() (*repo.Config, error) {
 
 var configCmd = &cobra.Command{
 	Use:   "config",
-	Short: "Show what this repository declares about the transcripts it takes in",
-	Long: `Print the resolved configuration of the repository this command runs in.
+	Short: "Show what settles how this repository takes transcripts in",
+	Long: `Print the resolved configuration of the repository this command runs in, and
+which layer settled each part of it.
 
-The declaration is ` + repo.FileName + ` at the repository's root, found from the
-working directory upwards. A repository that declares nothing is not broken:
-transcripts can still be fetched into a path named on the call, and nothing
-here says where they belong.`,
+Three layers, general to specific: what you carry everywhere, what the
+repository declares in ` + repo.FileName + ` at its root, and what you set about
+this repository. The last wins, because it is the most specific and you wrote
+it here. "set_in" names the layer behind each value.
+
+The repository's file is found from the working directory upwards. One that
+declares nothing is not broken: transcripts can still be fetched into a path
+named on the call, and nothing here says where they belong.`,
 	Args: cobra.NoArgs,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		r, err := repository()
@@ -55,16 +60,28 @@ here says where they belong.`,
 		if r.KeepsCatalog() {
 			mode = "catalog"
 		}
+		profiles := map[string]any{}
+		for _, name := range r.ProfileNames() {
+			profile, _ := r.Profile(name)
+			profiles[name] = map[string]any{
+				"tag":        profile.Tag,
+				"tag_set_in": r.Where("profiles." + name + ".tag"),
+				"dest":       profile.Dest,
+			}
+		}
 		resolved := map[string]any{
 			"root":     r.Root,
 			"declared": nil,
+			"identity": r.Identity,
+			"settings": r.Settings,
 			"mode":     mode,
 			"context":  r.Rel(r.Context),
 			"filing":   r.Filing,
 			"scratch":  r.Rel(r.Scratch),
 			"hub":      r.Rel(r.Hub),
 			"language": r.Language,
-			"profiles": r.ProfileNames(),
+			"profiles": profiles,
+			"set_in":   r.Sources(),
 		}
 		if r.Declares() {
 			resolved["declared"] = r.File

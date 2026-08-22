@@ -23,7 +23,7 @@ git push --tags
 - `cmd/` — Cobra CLI commands (one file per command)
 - `internal/api/` — Plaud API HTTP client
 - `internal/config/` — Config persistence (`~/.config/plaud/`)
-- `internal/repo/` — What a repository declares about the transcripts it takes in (`.plaud.json`)
+- `internal/repo/` — What a repository declares about the transcripts it takes in (`.plaud.json`), and what the person running the command settles about it (`~/.config/plaud/settings.json`)
 - `internal/catalog/` — The catalog of recordings a repository keeps (`catalog.jsonl`)
 - `internal/transcript/` — Transcript parsing, formatting (txt/srt/md), search, and filename utilities
 - `internal/ai/` — Claude API integration for ask/summarize commands
@@ -56,6 +56,7 @@ PLAUD_WHISPER_URL      Override the transcription service endpoint
 PLAUD_EMAIL            Non-interactive `login`: email to send the code to
 PLAUD_CODE             Non-interactive `login`: the emailed code
 PLAUD_OTP_TOKEN        Non-interactive `login`: the OTP token from the send step
+PLAUD_SETTINGS         The file holding what this person settles per repository
 ```
 
 `PLAUD_TOKEN` is what makes the CLI run where no interactive login ever happened: a container, a CI job, another person's machine. The environment wins over the file, and nothing is written to disk.
@@ -86,6 +87,10 @@ A transcript is not finished when it is decoded; it is finished when it is in th
 
 The file is looked for from the working directory upwards, and the directory holding it is the root. Asking git for the root instead is wrong twice: a checkout holding a declaration inside a subdirectory would be governed by the outer one, and a directory that is not a checkout has no root to offer.
 
+**Not everything about a repository is true for everyone working in it.** Where transcripts go and what they are called is the repository's, and is committed. Which of somebody's recordings belong here is theirs: a Plaud tag lives in one person's account, so a tag in the committed file hands the next person a profile that selects nothing. `~/.config/plaud/settings.json` is where that half goes, keyed by where the repository is hosted (`github.com/owner/repo`), which survives a fresh clone, a second checkout and another machine. A repository with no remote is keyed by its path, which is all it has. `PLAUD_SETTINGS` names the file instead, which is what tests and containers use.
+
+Three layers, general to specific: `defaults` in those settings, then the repository's file, then that person's entry for this repository. The last wins because it is the most specific and they wrote it about this one. A layer sets keys rather than replacing the layer beneath, so a person overriding `scratch` does not clear the language; the same is true inside a profile, whose halves usually come from different layers. `plaud config` prints `set_in`, naming the layer behind each value, and `plaud profile set` writes the person's half without anybody editing JSON.
+
 | Key | Effect |
 | :-- | :-- |
 | `context` | The document describing this work, read as what settles how names are spelt. |
@@ -95,7 +100,7 @@ The file is looked for from the working directory upwards, and the directory hol
 | `language` | Settles the language of every recording taken in here. |
 | `dest`, `name` | Templates over `{date}`, `{year}`, `{month}`, `{day}`, `{time}`, `{slug}`, `{id}`, `{short_id}`. A field nothing answers is refused rather than written into a filename. |
 | `front_matter` | Written above the `voices:` block, so a transcript arrives with what the repository files by. |
-| `profiles` | Named sets of the keys above, plus the `tag` that selects recordings for each. |
+| `profiles` | Named sets of the keys above. The `tag` that selects recordings for each is a person's, not the repository's, and belongs in their settings. |
 | `exclude_tags`, `exclude_reason` | Recordings out of scope here. Catalog only. |
 | `utc_offset` | The repository's timezone, so two machines file one recording under one day. |
 
@@ -105,7 +110,7 @@ The description is composed rather than chosen. The repository's document holds 
 
 `transcript` falls back to the repository's document when neither flag is passed, and a run that only settles the names in files already on disk needs no description at all, because it decodes nothing.
 
-`plaud sync` does the same errand for every recording a tag selects, and a profile names both the tag and where those recordings are filed, so `--profile cerc` is the whole instruction. What says a recording is already here is the file at the destination the same rules produce, which is why running it twice decodes nothing.
+`plaud sync` does the same errand for every recording a tag selects, and a profile names both where those recordings are filed and the tag that selects them, so `--profile cerc` is the whole instruction. A profile whose tag nobody set is refused rather than run: without one, the filter selects the entire account. What says a recording is already here is the file at the destination the same rules produce, which is why running it twice decodes nothing.
 
 A transcript already here is not left alone. Who a voice belongs to is settled by the people known today, so somebody named since the file was written is still SPEAKER_02 in it, and a sync that only fetched what was missing would leave that standing. Every transcript in range is asked about again, and the ones whose turns changed name are listed at the end of the run: a rename nobody is told about is a file that quietly stopped matching the transcript beside it. `--only-new` skips that half.
 
@@ -193,6 +198,7 @@ The container idles down after two minutes, so waiting is enough — as long as 
 All stored in `~/.config/plaud/` with 0600 permissions:
 - `token.json` — Plaud auth token and device ID
 - `auth.json` — the Google sign-in for the transcription service (0600; a refresh token is worth the account)
+- `settings.json` — What this person settles about the repositories they work in, chiefly which of their recordings feed which profile
 - `update-state.json` — Version check cache
 - `cache/transcripts/` — Local transcript cache
 

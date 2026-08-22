@@ -28,8 +28,9 @@ var syncCmd = &cobra.Command{
 	Short: "Bring in every recording this repository is missing",
 	Long: `Fetch the recordings this repository takes in and does not have yet.
 
-A profile names both the tag that selects recordings and where they are filed,
-so 'plaud sync --profile cerc' is the whole instruction. Filters work too, and
+A profile names both where the recordings are filed, which the repository
+declares, and the tag that selects them, which is yours: a tag lives in one
+person's Plaud account. 'plaud profile set' writes your half. Filters work too, and
 stand in for a profile in a repository that declares none.
 
 What says a recording is already here is the file: the destination is worked
@@ -61,6 +62,11 @@ Examples:
 		filter := syncFilter
 		if filter.tag == "" && e.profile.Tag != "" {
 			filter.tag = e.profile.Tag
+		}
+		// A profile whose tag nobody set selects every recording in the
+		// account, which is the one way this split fails quietly.
+		if syncProfile != "" && filter.tag == "" && !filter.selects() && !syncAll {
+			return missingTag(e.repo, syncProfile)
 		}
 		if !syncAll && !filter.selects() {
 			return fmt.Errorf("nothing narrows this: pass --profile, a filter such as --tag or --since, or --all")
