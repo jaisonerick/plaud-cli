@@ -13,7 +13,9 @@ This moves the decisions into the binary. What is left in Python is the one thin
 | composing the repository's context with the call's | `plaud fetch` |
 | `fetch` — probe, transcript, summary, catalog entry | `plaud fetch` |
 | `doctor`, `config` | `plaud doctor`, `plaud config` |
-| the catalog: `refresh`, `pull`, `set`, `status`, `query`, `gen-links` | `plaud catalog …` |
+| the catalog: `refresh`, `set`, `status`, `query` | `plaud catalog …` |
+| `pull` | folded into `plaud fetch`, which updates the catalog itself |
+| `gen-links` | dropped: the page listed what Plaud had to be asked to transcribe, and the CLI transcribes |
 | installing the binary, PATH, Windows unblocking | stays in Python |
 
 ## Finding the repository
@@ -69,3 +71,5 @@ Every recording carrying the profile's tag that this repository has not filed ye
 It stays a `catalog.jsonl` at the repository, git-tracked, and it stays the source of truth. The curation in it is about that repository — which project a recording belongs to, which note it became — so it is versioned with it, and moving it to an account-level store would separate it from the thing it describes.
 
 The sqlite index goes. It exists to answer `query`, and it is rebuilt from the catalog by a command a person has to remember to run, which is a second copy that can be stale. `catalog list` filters in the CLI and prints JSON, which covers what the queries in use actually ask.
+
+A refresh over the 588 entries in the second brain leaves every one of them byte-identical and adds only what is new, which is the guarantee that matters: the curation is the reason the file is in git.

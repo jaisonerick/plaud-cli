@@ -3,11 +3,13 @@ package cmd
 import (
 	"context"
 	"fmt"
+	"math"
 	"os"
 	"path/filepath"
 	"strings"
 
 	"github.com/jaisonerick/plaud-cli/internal/api"
+	"github.com/jaisonerick/plaud-cli/internal/catalog"
 	"github.com/jaisonerick/plaud-cli/internal/modal"
 	"github.com/jaisonerick/plaud-cli/internal/repo"
 	"github.com/jaisonerick/plaud-cli/internal/transcript"
@@ -39,7 +41,8 @@ the service already decoded it. A transcript already at the destination is not
 fetched again: the names in it are settled against the voices as they are known
 today, which is what a voice named since is worth doing.
 
-The summary comes along when Plaud has one, beside the transcript.
+The summary comes along when Plaud has one, beside the transcript, and a
+repository keeping a catalog has this recording's entry brought up to date.
 
 Examples:
   plaud fetch abc123
@@ -49,28 +52,14 @@ Examples:
 	Args: cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
 		ctx := cmd.Context()
-		id := args[0]
 
-		r, err := repository()
+		e, err := newErrand(fetchProfile, fetchContext, fetchContextFile, fetchFormat, fetchLanguage, fetchForce)
 		if err != nil {
 			return err
 		}
-		profile, err := chooseProfile(r, fetchProfile)
-		if err != nil {
-			return err
-		}
-		if err := validateFormat(fetchFormat); err != nil {
-			return err
-		}
+		e.to, e.summaryTo = fetchTo, fetchSummaryTo
 
-		// Before anything is fetched: a description that cannot be read is
-		// worth saying so about while it still costs nothing.
-		description, err := describe(r, profile, fetchContext, fetchContextFile)
-		if err != nil {
-			return err
-		}
-
-		detail, err := client.GetDetail(ctx, id)
+		detail, err := client.GetDetail(ctx, args[0])
 		if err != nil {
 			return fmt.Errorf("fetching recording details: %w", err)
 		}
@@ -79,61 +68,127 @@ Examples:
 			Duration: detail.Duration, HasTranscript: detail.HasTranscript(), HasSummary: detail.HasSummary(),
 		}
 
-		dest, err := destination(r, profile, recording)
-		if err != nil {
-			return err
-		}
-		if err := os.MkdirAll(filepath.Dir(dest), 0755); err != nil {
-			return fmt.Errorf("creating %s: %w", filepath.Dir(dest), err)
-		}
-
 		whisper, err := whisperClient()
 		if err != nil {
 			return err
 		}
 
-		errand := report{Recording: recording.ID}
+		one := report{Recording: recording.ID}
 		if jsonOut {
-			held = &errand
+			held = &one
 			defer func() { held = nil }()
 		}
 
-		language := first(fetchLanguage, profile.Language, r.Language)
-		how := filing{
-			format: fetchFormat,
-			force:  fetchForce,
-			opts:   modal.TranscribeOpts{ContextDoc: description, Language: language, Force: fetchForce},
-		}
-		if err := newJob(recording, dest, how, true).run(ctx, whisper); err != nil {
-			return err
-		}
-		if err := stamp(dest, r, profile, recording, fetchFormat); err != nil {
-			return err
-		}
-
-		summary, err := fetchSummary(ctx, r, dest, recording)
+		dest, summary, err := e.run(ctx, whisper, recording)
 		if err != nil {
 			return err
 		}
 
 		if jsonOut {
-			errand.Recording = recording.ID
-			errand.Path = dest
-			errand.Summary = summary
-			errand.Filing = r.Filing
-			printReport(errand)
+			one.Recording = recording.ID
+			one.Path = dest
+			one.Summary = summary
+			one.Filing = e.repo.Filing
+			printReport(one)
 			return nil
 		}
 
-		fmt.Printf("transcript: %s\n", r.Rel(dest))
+		fmt.Printf("transcript: %s\n", e.repo.Rel(dest))
 		if summary != "" {
-			fmt.Printf("summary:    %s\n", r.Rel(summary))
+			fmt.Printf("summary:    %s\n", e.repo.Rel(summary))
 		}
-		if r.Filing != "" {
-			fmt.Printf("\nWhere this belongs in this repository: %s\n", r.Filing)
+		if e.repo.Filing != "" {
+			fmt.Printf("\nWhere this belongs in this repository: %s\n", e.repo.Filing)
 		}
 		return nil
 	},
+}
+
+// errand is what this repository does with a recording: where the transcript
+// goes, what describes it, and how it is written. It is settled once and used
+// for one recording or for a hundred.
+type errand struct {
+	repo        *repo.Config
+	profile     repo.Profile
+	description string
+	how         filing
+
+	// to and summaryTo override the repository, and are how a caller files one
+	// recording somewhere the configuration does not describe.
+	to        string
+	summaryTo string
+}
+
+func newErrand(profileName, text, file, format, language string, force bool) (*errand, error) {
+	r, err := repository()
+	if err != nil {
+		return nil, err
+	}
+	profile, err := chooseProfile(r, profileName)
+	if err != nil {
+		return nil, err
+	}
+	if err := validateFormat(format); err != nil {
+		return nil, err
+	}
+
+	// Before anything is fetched: a description that cannot be read is worth
+	// saying so about while it still costs nothing.
+	description, err := describe(r, profile, text, file)
+	if err != nil {
+		return nil, err
+	}
+
+	settled := first(language, profile.Language, r.Language)
+	return &errand{
+		repo:        r,
+		profile:     profile,
+		description: description,
+		how: filing{
+			format: format,
+			force:  force,
+			opts:   modal.TranscribeOpts{ContextDoc: description, Language: settled, Force: force},
+		},
+	}, nil
+}
+
+func (e *errand) run(ctx context.Context, whisper *modal.HTTPClient, recording api.RecordingSimple) (dest, summary string, err error) {
+	dest, err = e.destination(recording)
+	if err != nil {
+		return "", "", err
+	}
+	if err := os.MkdirAll(filepath.Dir(dest), 0755); err != nil {
+		return "", "", fmt.Errorf("creating %s: %w", filepath.Dir(dest), err)
+	}
+
+	if err := newJob(recording, dest, e.how, true).run(ctx, whisper); err != nil {
+		return "", "", err
+	}
+	if err := e.stamp(dest, recording); err != nil {
+		return "", "", err
+	}
+	summary, err = e.fetchSummary(ctx, dest, recording)
+	if err != nil {
+		return "", "", err
+	}
+	return dest, summary, e.record(recording, dest, summary)
+}
+
+// destination is the file this transcript belongs in: what a caller named, or
+// what the repository's templates work out.
+func (e *errand) destination(recording api.RecordingSimple) (string, error) {
+	ext := transcript.Ext(e.how.format)
+	subject := repo.Recording{ID: recording.ID, Name: recording.Name, Start: recording.StartTime}
+
+	if e.to == "" {
+		return e.repo.Target(e.profile, subject, ext)
+	}
+	if filepath.Ext(e.to) != "" {
+		return e.repo.Abs(e.to), nil
+	}
+	// A directory keeps the repository's naming; only the place changed.
+	named := repo.Config{Root: e.repo.Root, Dest: e.to, Name: e.repo.Name, UTCOffset: e.repo.UTCOffset}
+	return named.Target(e.profile, subject, ext)
 }
 
 // chooseProfile picks the named set of rules, and refuses a name the
@@ -151,21 +206,6 @@ func chooseProfile(r *repo.Config, name string) (repo.Profile, error) {
 		return repo.Profile{}, fmt.Errorf("%s declares no profile %q (it declares: %s)", repo.FileName, name, declared)
 	}
 	return profile, nil
-}
-
-// destination is the file this transcript belongs in: what --to names, or what
-// the repository's templates work out.
-func destination(r *repo.Config, p repo.Profile, recording api.RecordingSimple) (string, error) {
-	ext := transcript.Ext(fetchFormat)
-	if fetchTo == "" {
-		return r.Target(p, repo.Recording{ID: recording.ID, Name: recording.Name, Start: recording.StartTime}, ext)
-	}
-	if filepath.Ext(fetchTo) != "" {
-		return r.Abs(fetchTo), nil
-	}
-	// A directory keeps the repository's naming; only the place changed.
-	named := repo.Config{Root: r.Root, Dest: fetchTo, Name: r.Name, UTCOffset: r.UTCOffset}
-	return named.Target(p, repo.Recording{ID: recording.ID, Name: recording.Name, Start: recording.StartTime}, ext)
 }
 
 // describe composes what the polisher is told about the recording.
@@ -212,8 +252,8 @@ func describe(r *repo.Config, p repo.Profile, text, file string) (string, error)
 // came from. The recording is what makes a destination answer for itself: a
 // directory can be read for what has already been filed, so nothing has to
 // remember it.
-func stamp(dest string, r *repo.Config, p repo.Profile, recording api.RecordingSimple, format string) error {
-	if format != "md" {
+func (e *errand) stamp(dest string, recording api.RecordingSimple) error {
+	if e.how.format != "md" {
 		return nil
 	}
 	content, err := os.ReadFile(dest)
@@ -227,10 +267,10 @@ func stamp(dest string, r *repo.Config, p repo.Profile, recording api.RecordingS
 	}
 
 	declared := map[string]string{}
-	for key, value := range r.FrontMatter {
+	for key, value := range e.repo.FrontMatter {
 		declared[key] = value
 	}
-	for key, value := range p.FrontMatter {
+	for key, value := range e.profile.FrontMatter {
 		declared[key] = value
 	}
 	fields := append(transcript.Fields(declared), transcript.Field{Key: transcript.RecordingKey, Value: recording.ID})
@@ -240,19 +280,20 @@ func stamp(dest string, r *repo.Config, p repo.Profile, recording api.RecordingS
 
 // fetchSummary copies the summary Plaud wrote, when it wrote one. Naming an
 // exact file names the transcript and only the transcript.
-func fetchSummary(ctx context.Context, r *repo.Config, dest string, recording api.RecordingSimple) (string, error) {
-	target := fetchSummaryTo
+func (e *errand) fetchSummary(ctx context.Context, dest string, recording api.RecordingSimple) (string, error) {
+	if !recording.HasSummary {
+		return "", nil
+	}
+
+	target := e.summaryTo
 	switch {
 	case target != "":
-		target = r.Abs(target)
-	case fetchTo != "" && filepath.Ext(fetchTo) != "":
+		target = e.repo.Abs(target)
+	case e.to != "" && filepath.Ext(e.to) != "":
 		return "", nil
 	default:
 		ext := filepath.Ext(dest)
 		target = strings.TrimSuffix(dest, ext) + "-summary" + ext
-	}
-	if !recording.HasSummary {
-		return "", nil
 	}
 
 	detail, err := client.GetDetail(ctx, recording.ID)
@@ -270,6 +311,42 @@ func fetchSummary(ctx context.Context, r *repo.Config, dest string, recording ap
 		return "", fmt.Errorf("downloading summary: %w", err)
 	}
 	return target, nil
+}
+
+// record brings this recording's catalog entry up to date, in a repository
+// that keeps one. Fetching without the catalog noticing is what left entries
+// saying a recording had no transcript while the file sat beside them.
+func (e *errand) record(recording api.RecordingSimple, dest, summary string) error {
+	if !e.repo.KeepsCatalog() {
+		return nil
+	}
+	if _, err := os.Stat(dest); err != nil {
+		return nil
+	}
+
+	c, err := catalog.Open(e.repo.Hub)
+	if err != nil {
+		return err
+	}
+	entry, known := c.Get(recording.ID)
+	if !known {
+		entry = &catalog.Entry{
+			ID: recording.ID, Filename: recording.Name, StartTime: recording.StartTime,
+			RecordedAt:  e.repo.LocalTime(recording.StartTime).Format("2006-01-02 15:04:05"),
+			DurationMS:  recording.Duration,
+			DurationMin: math.Round(float64(recording.Duration)/600) / 100,
+			URL:         "https://web.plaud.ai/file/" + recording.ID,
+		}
+		c.Put(entry)
+	}
+	entry.TranscriptPath = catalog.Text(e.repo.Rel(dest))
+	if summary != "" {
+		entry.SummaryPath = catalog.Text(e.repo.Rel(summary))
+	}
+	if entry.Recomputed() {
+		entry.Status = catalog.Transcribed
+	}
+	return c.Save()
 }
 
 func first(values ...string) string {

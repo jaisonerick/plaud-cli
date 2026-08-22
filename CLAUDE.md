@@ -24,6 +24,7 @@ git push --tags
 - `internal/api/` — Plaud API HTTP client
 - `internal/config/` — Config persistence (`~/.config/plaud/`)
 - `internal/repo/` — What a repository declares about the transcripts it takes in (`.plaud.json`)
+- `internal/catalog/` — The catalog of recordings a repository keeps (`catalog.jsonl`)
 - `internal/transcript/` — Transcript parsing, formatting (txt/srt/md), search, and filename utilities
 - `internal/ai/` — Claude API integration for ask/summarize commands
 - `internal/modal/` — Modal client for Whisper transcription
@@ -103,6 +104,16 @@ The file is looked for from the working directory upwards, and the directory hol
 The description is composed rather than chosen. The repository's document holds the project's people and how their names are spelt; `--context` on the call holds who was in this room. They know different things, so one is added to the other. `--context-file` is the exception, standing in for the document entirely, which is how a recording described by a paper of its own is fetched.
 
 `transcript` falls back to the repository's document when neither flag is passed, and a run that only settles the names in files already on disk needs no description at all, because it decodes nothing.
+
+`plaud sync` does the same errand for every recording a tag selects, and a profile names both the tag and where those recordings are filed, so `--profile cerc` is the whole instruction. What says a recording is already here is the file at the destination the same rules produce, which is why running it twice fetches nothing the second time. `--refresh` also settles the names in what is already there, at a request each.
+
+## The Catalog
+
+A repository declaring `hub` keeps track of the recordings it knows about, in `catalog.jsonl` in that directory: git-tracked, one JSON object per recording, and the whole of what is stored. Half of each entry is what Plaud says and is replaced on every refresh; the other half is what a person decided, and `Entry.Recomputed` is what stops a refresh from overwriting it. A recording somebody filed or ruled out stays that way.
+
+`fetch` and `sync` bring the entry up to date themselves. Fetching without the catalog noticing is what left entries claiming a recording had no transcript while the file sat beside them.
+
+There is no index to build. The catalog is read whole and filtered in `catalog list`, which is fast enough at this size and cannot be stale; a sqlite copy rebuilt by a command somebody has to remember to run could be.
 
 ## Transcription
 
