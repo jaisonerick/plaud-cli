@@ -253,6 +253,55 @@ class WhisperTranscriber:
                 await speaker_volume.commit.aio()
                 return JSONResponse(result)
 
+        @api.put("/speakers/{audio_id}/{key}")
+        async def name_speaker(
+            audio_id: str,
+            key: str,
+            name: str = Form(...),
+            company: str = Form(...),
+            surname_unknown: bool = Form(False),
+            who: Identity = Depends(caller),
+        ):
+            """Give a voice of a recording a person, creating that person if needed.
+
+            The key is the id a voice was given when the recording was
+            separated, or the label a transcript carries. An id answers
+            whichever run it came from; a label is one run's numbering and
+            answers only while that run is the current one, which is what makes
+            naming from an old transcript ask by id.
+            """
+            from modal_whisper.speaker_store import NotFull
+
+            store = await open_speaker_store()
+            try:
+                found = store.voices_of(audio_id, [key])
+                held = found.get(key)
+                if held is None:
+                    known = sorted(store.get_audio_embeddings(audio_id))
+                    if known:
+                        detail = (
+                            f"{audio_id} has no voice {key!r}. It has: {', '.join(known)}"
+                        )
+                    else:
+                        detail = (
+                            f"nothing is stored for recording {audio_id} — "
+                            "transcribe it first"
+                        )
+                    raise HTTPException(status_code=404, detail=detail)
+
+                person_id = store.upsert_person(
+                    name, company, who.email, surname_unknown
+                )
+                voices = store.add_voice(person_id, held[1], who.email)
+                person = store.person(person_id)
+            except NotFull as err:
+                raise HTTPException(status_code=400, detail=str(err)) from err
+            finally:
+                store.close()
+
+            await speaker_volume.commit.aio()
+            return {"person": _person_json(person), "voices": voices, "voice": held[0]}
+
         @api.get("/speakers/{audio_id}")
         async def recording_voices(audio_id: str, who: Identity = Depends(caller)):
             """The voices this service holds for a recording.
