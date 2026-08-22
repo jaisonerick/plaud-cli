@@ -148,6 +148,35 @@ Examples:
 	},
 }
 
+// report is what a run of this command says to whatever called it, and the
+// only shape a routine should read. The line a person reads says the same
+// things in prose, but a routine deciding whether to file a transcript needs
+// the language vote as numbers: a meeting that opened in silence comes back
+// translated, fluently and with nothing in the file to say a choice was made.
+type report struct {
+	Recording      string            `json:"recording_id"`
+	Path           string            `json:"path,omitempty"`
+	Written        bool              `json:"written"`
+	Source         string            `json:"source"`
+	Renamed        int               `json:"renamed,omitempty"`
+	Language       *modal.Language   `json:"language,omitempty"`
+	Speakers       map[string]string `json:"speakers,omitempty"`
+	Sparse         bool              `json:"sparse,omitempty"`
+	CharsPerSecond float64           `json:"chars_per_second,omitempty"`
+	Reason         string            `json:"reason,omitempty"`
+}
+
+func say(r report) {
+	if !jsonOut {
+		return
+	}
+	line, err := json.Marshal(r)
+	if err != nil {
+		return
+	}
+	fmt.Println(string(line))
+}
+
 // job is one recording on its way to one file.
 type job struct {
 	recording api.RecordingSimple
@@ -211,6 +240,7 @@ func (j job) refreshNames(ctx context.Context, whisper *modal.HTTPClient) error 
 		if j.alone {
 			fmt.Fprintf(os.Stderr, "%s is already there; only a markdown transcript can have its names refreshed.\n", j.dest)
 		}
+		say(report{Recording: j.recording.ID, Path: j.dest, Source: "on disk", Reason: "only markdown is refreshed"})
 		return nil
 	}
 
@@ -287,6 +317,7 @@ func (j job) refreshNames(ctx context.Context, whisper *modal.HTTPClient) error 
 		if j.alone {
 			fmt.Fprintf(os.Stderr, "%s already names every voice the service can place.\n", j.dest)
 		}
+		say(report{Recording: j.recording.ID, Path: j.dest, Source: "on disk"})
 		return nil
 	}
 
@@ -310,6 +341,7 @@ func (j job) refreshNames(ctx context.Context, whisper *modal.HTTPClient) error 
 		return nil
 	}
 	fmt.Fprintf(os.Stderr, "Named %d turn(s) in %s\n", renamed, j.dest)
+	say(report{Recording: j.recording.ID, Path: j.dest, Source: "on disk", Renamed: renamed})
 	return nil
 }
 
@@ -376,6 +408,7 @@ func (j job) fromAudio(ctx context.Context, whisper *modal.HTTPClient) error {
 	// the next run would find that file and take the recording for done.
 	if len(result.Segments) == 0 {
 		fmt.Fprintf(os.Stderr, "%s holds no speech, so nothing was written.\n", j.recording.Name)
+		say(report{Recording: j.recording.ID, Source: "service", Reason: "no speech"})
 		return nil
 	}
 	if err := saveWhisperTranscript(result, trFormat, j.dest); err != nil {
@@ -388,6 +421,12 @@ func (j job) fromAudio(ctx context.Context, whisper *modal.HTTPClient) error {
 	reportLanguage(os.Stderr, result)
 	reportUnpolished(os.Stderr, result)
 	reportSparse(os.Stderr, result)
+	say(report{
+		Recording: j.recording.ID, Path: j.dest, Written: true,
+		Source:   map[bool]string{true: "kept", false: "decoded"}[result.Reused],
+		Language: &result.Language, Speakers: result.Speakers,
+		Sparse: result.Sparse, CharsPerSecond: result.CharsPerSecond,
+	})
 
 	return reportSpeakers(ctx, whisper, result, audioData, j)
 }
