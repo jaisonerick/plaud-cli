@@ -121,6 +121,66 @@ func notifyUpdate(current, latest string) {
 	fmt.Fprintf(os.Stderr, "\nA new version of plaud is available: v%s → v%s\nRun `plaud update` to upgrade.\n", current, latest)
 }
 
+// replaceBinary puts the new binary where this one runs from.
+//
+// Windows refuses to overwrite a file that is running, but it will rename one:
+// the running program keeps its handle and the name is freed for the new
+// binary. What is moved aside is deleted by the next run, which is the first
+// moment nothing holds it. Elsewhere a rename is enough, except for a path
+// only root can write, and that is what sudo is for.
+func replaceBinary(execPath, tmpPath string, rename func(string, string) error) error {
+	if err := rename(tmpPath, execPath); err == nil {
+		return nil
+	}
+
+	if runtime.GOOS != "windows" {
+		sudoCmd := exec.Command("sudo", "cp", tmpPath, execPath)
+		sudoCmd.Stdin, sudoCmd.Stdout, sudoCmd.Stderr = os.Stdin, os.Stdout, os.Stderr
+		if err := sudoCmd.Run(); err != nil {
+			return fmt.Errorf("replacing the binary, even with sudo: %w", err)
+		}
+		os.Remove(tmpPath)
+		return nil
+	}
+
+	return replaceByMovingAside(execPath, tmpPath, rename)
+}
+
+// replaceByMovingAside frees the name of a binary that cannot be written over.
+func replaceByMovingAside(execPath, tmpPath string, rename func(string, string) error) error {
+	aside := oldBinaryPath(execPath)
+	os.Remove(aside)
+	if err := rename(execPath, aside); err != nil {
+		return fmt.Errorf("moving the running binary aside: %w", err)
+	}
+	if err := rename(tmpPath, execPath); err != nil {
+		// Better the old binary back than none at all.
+		rename(aside, execPath)
+		return fmt.Errorf("putting the new binary in place: %w", err)
+	}
+	return nil
+}
+
+// oldBinaryPath is where the running binary waits to be deleted, one update
+// behind.
+func oldBinaryPath(execPath string) string {
+	return execPath + ".old"
+}
+
+// sweepOldBinary drops what an update left behind, which is nothing on the run
+// that made it and a file on every run after.
+func sweepOldBinary() {
+	execPath, err := os.Executable()
+	if err != nil {
+		return
+	}
+	sweepOldBinaryAt(execPath)
+}
+
+func sweepOldBinaryAt(execPath string) {
+	os.Remove(oldBinaryPath(execPath))
+}
+
 // newerThan reports whether one release is later than another. The check is
 // what keeps a stale answer quiet: the last one is remembered for a day, so a
 // machine that upgrades meanwhile would otherwise be told to move to the
@@ -239,20 +299,9 @@ var updateCmd = &cobra.Command{
 		tmpFile.Close()
 		os.Chmod(tmpPath, 0755)
 
-		// Try direct rename first
-		if err := os.Rename(tmpPath, execPath); err != nil {
-			if runtime.GOOS != "windows" {
-				// Fall back to sudo cp for permission-restricted paths like /usr/local/bin
-				sudoCmd := exec.Command("sudo", "cp", tmpPath, execPath)
-				sudoCmd.Stdin = os.Stdin
-				sudoCmd.Stdout = os.Stdout
-				sudoCmd.Stderr = os.Stderr
-				if sudoErr := sudoCmd.Run(); sudoErr != nil {
-					os.Remove(tmpPath)
-					return fmt.Errorf("replacing binary (tried sudo): %w", sudoErr)
-				}
-			}
+		if err := replaceBinary(execPath, tmpPath, os.Rename); err != nil {
 			os.Remove(tmpPath)
+			return err
 		}
 
 		fmt.Printf("Updated to v%s\n", latest)

@@ -181,9 +181,15 @@ class WhisperTranscriber:
             # Deciding otherwise costs minutes of GPU and, worse, separates the
             # voices afresh: the labels are renumbered, and every transcript
             # written from the run before points at voices that are gone.
+            # A language settled by the caller is a statement that what is on
+            # record came back in the wrong one, so it is not what to hand back.
+            wanted_language = opts_json.get("language", "")
+
             if not opts_json.get("force"):
                 transcripts = await open_transcripts()
                 kept = transcripts.get(recording_id)
+                if kept and wanted_language and wanted_language != kept.get("language", {}).get("code"):
+                    kept = None
                 if kept:
                     speakers = await _who_they_are_now(kept.get("voices", {}))
                     kept = {

@@ -25,6 +25,9 @@ var rootCmd = &cobra.Command{
 	Version:      Version,
 	SilenceUsage: true,
 	PersistentPostRun: func(cmd *cobra.Command, args []string) {
+		// The binary an update moved aside is deleted here, on the first run
+		// where nothing is holding it open.
+		sweepOldBinary()
 		if cmd.Name() != "update" {
 			CheckForUpdate()
 		}
