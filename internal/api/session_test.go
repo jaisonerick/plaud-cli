@@ -4,6 +4,7 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 )
 
@@ -133,5 +134,50 @@ func TestSendGivesUpWhenRenewalDoesNotHelp(t *testing.T) {
 	}
 	if calls != 2 {
 		t.Errorf("made %d calls, want 2: one refusal, one retry, then stop", calls)
+	}
+}
+
+// A login that establishes nothing must not be waved through on the strength
+// of the session it was meant to replace. Signing in as somebody else, or as
+// an address with no account, otherwise reports success while every later call
+// still answers as the account already signed in.
+func TestALoginCannotBeVouchedForByTheSessionItReplaces(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// No Set-Cookie: the server took the code and handed over nothing.
+		w.Write([]byte(`{"status":0,"msg":"success","access_token":"","token_id":"t","version_tag":"v3"}`))
+	}))
+	defer srv.Close()
+
+	c := &Client{
+		BaseURL: srv.URL,
+		HTTP:    srv.Client(),
+		Session: &Session{UserToken: "the-account-already-signed-in", RefreshToken: "r"},
+	}
+
+	if _, err := c.VerifyCode(context.Background(), "otp", "123456"); err == nil {
+		t.Fatal("a login that established nothing was accepted")
+	}
+	if c.Session.Valid() {
+		t.Error("the session that the failed login was meant to replace is still in hand")
+	}
+}
+
+// An address nobody has an account for is signed up rather than refused, so a
+// typo answers "success". That reads as an empty account rather than a wrong
+// address unless the client says which happened.
+func TestANewAccountIsReportedAsSuchRatherThanAsAnEmptyOne(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte(`{"status":0,"msg":"success","access_token":"","is_new_user":true,"set_password_token":"x"}`))
+	}))
+	defer srv.Close()
+
+	c := &Client{BaseURL: srv.URL, HTTP: srv.Client()}
+
+	_, err := c.VerifyCode(context.Background(), "otp", "123456")
+	if err == nil {
+		t.Fatal("signing up a brand new account was reported as a successful login")
+	}
+	if !strings.Contains(err.Error(), "just created") {
+		t.Errorf("the error does not say an account was created: %v", err)
 	}
 }
