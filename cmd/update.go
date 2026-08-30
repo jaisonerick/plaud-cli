@@ -113,6 +113,43 @@ func CheckForUpdate() {
 	notifyUpdate(current, latest)
 }
 
+// remindTokenMigration says, once a command has done its work, that the
+// sign-in it used is the one from before v3.
+//
+// It rides with the update notice because it is the same kind of message —
+// something worth putting right that is not what the caller asked for — and
+// keeps the same restraint: stderr, after the output, so a command whose
+// stdout something else is reading is left alone. It is not gated on a release
+// being available, because what is out of date here is the credential rather
+// than the binary, and a machine already on the newest build is exactly where
+// a token from the old scheme goes unnoticed.
+//
+// `login` and `doctor` are left out. One is where this is put right and the
+// other reports it in full, so a reminder on either is noise.
+func remindTokenMigration(cmd *cobra.Command) {
+	if tokenMigrationDue(cmd) {
+		fmt.Fprint(os.Stderr, "\n"+tokenMigrationNotice)
+	}
+}
+
+// tokenMigrationDue is the decision on its own, so that what is worth saying
+// can be tested without a command having to be run to say it.
+func tokenMigrationDue(cmd *cobra.Command) bool {
+	if cfg == nil || !cfg.Superseded() {
+		return false
+	}
+	switch cmd.Name() {
+	case "login", "doctor":
+		return false
+	}
+	return true
+}
+
+// tokenMigrationNotice is the short form of it. The whole of it, with the
+// steps, is what `plaud doctor` prints.
+const tokenMigrationNotice = "This sign-in is the bearer token from before v3, and nothing renews it.\n" +
+	"Run `plaud login --migrate` to replace it with a session, or `plaud doctor` for the detail.\n"
+
 func notifyUpdate(current, latest string) {
 	if !newerThan(latest, current) {
 		return

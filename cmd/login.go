@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/jaisonerick/plaud-cli/internal/api"
+	"github.com/jaisonerick/plaud-cli/internal/config"
 	"github.com/spf13/cobra"
 )
 
@@ -18,6 +19,7 @@ var (
 	sendCodeFlag bool
 	codeFlag     string
 	otpTokenFlag string
+	migrateFlag  bool
 )
 
 var loginCmd = &cobra.Command{
@@ -28,6 +30,7 @@ var loginCmd = &cobra.Command{
   plaud login                                  # Interactive email code flow
   plaud login --password                       # Email and password
   plaud login --token TOKEN                    # Use an existing access token
+  plaud login --migrate                        # Replace a pre-v3 bearer token with a session
 
 The email code flow also comes in two halves, so that something other than this
 terminal can collect the code: a chat with an assistant, a form, another
@@ -46,6 +49,22 @@ An account created through Google, Apple or Microsoft has no password until one
 is set in the Plaud app, so those accounts use the code flow.`,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		ctx := cmd.Context()
+
+		// --migrate is a guard rather than a second way in. The migration is
+		// the ordinary code login: saveSession already clears the bearer token
+		// it replaces, so there is nothing here the flag has to do differently.
+		// What it adds is refusing when there is nothing to replace, which is
+		// what makes a reminder printed by another command safe to follow
+		// without first working out whether it applies.
+		if migrateFlag {
+			if cfg.Scheme() == config.SessionScheme {
+				fmt.Println("Already signed in with a v3 session. Nothing to migrate.")
+				return nil
+			}
+			if tokenFlag != "" {
+				return fmt.Errorf("--migrate replaces a bearer token with a session, and --token stores another one")
+			}
+		}
 
 		// Direct token login (e.g. from browser session)
 		if tokenFlag != "" {
@@ -236,5 +255,6 @@ func init() {
 	loginCmd.Flags().BoolVar(&sendCodeFlag, "send-code", false, "send the login code and print the handle to finish with")
 	loginCmd.Flags().StringVar(&otpTokenFlag, "otp-token", "", "handle returned by --send-code (also PLAUD_OTP_TOKEN)")
 	loginCmd.Flags().StringVar(&codeFlag, "code", "", "the code that arrived by email (also PLAUD_CODE)")
+	loginCmd.Flags().BoolVar(&migrateFlag, "migrate", false, "replace a pre-v3 bearer token with a session, refusing when there is nothing to replace")
 	rootCmd.AddCommand(loginCmd)
 }

@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/jaisonerick/plaud-cli/internal/auth"
+	"github.com/jaisonerick/plaud-cli/internal/config"
 	"github.com/jaisonerick/plaud-cli/internal/repo"
 	"github.com/spf13/cobra"
 )
@@ -40,24 +41,12 @@ task, so they are reported on separate lines.`,
 			fmt.Sprintf("plaud CLI     %s (%s/%s)", Version, runtime.GOOS, runtime.GOARCH),
 			fmt.Sprintf("  at          %s", binary),
 			fmt.Sprintf("  plaud       %s", plaud),
-			fmt.Sprintf("  service     %s", service),
 		}
-		if expiry, renewed := tokenExpiry(); expiry != nil {
-			switch {
-			case renewed:
-				// A session renews itself as it is used, so its expiry is a
-				// fact rather than a deadline and needs no warning.
-				lines = append(lines, fmt.Sprintf("  session     until %s, renewed as it is used",
-					expiry.Format("2006-01-02 15:04")))
-			default:
-				left := int(time.Until(*expiry).Hours() / 24)
-				warn := ""
-				if left < 21 {
-					warn = "  <-- renew it, nothing here refreshes it"
-				}
-				lines = append(lines, fmt.Sprintf("  expires     %s (%d days)%s", expiry.Format("2006-01-02"), left, warn))
-			}
-		}
+		// The scheme and the expiry are the Plaud sign-in's, so they sit under
+		// the Plaud account rather than after the service, where they read as
+		// facts about the wrong one of the two.
+		lines = append(lines, signInLines()...)
+		lines = append(lines, fmt.Sprintf("  service     %s", service))
 
 		declared := "none — nothing declares where a transcript belongs here"
 		if r.Declares() {
@@ -78,8 +67,11 @@ task, so they are reported on separate lines.`,
 		}
 		fmt.Println(strings.Join(lines, "\n"))
 
-		if strings.HasPrefix(plaud, "NOT") {
+		switch {
+		case strings.HasPrefix(plaud, "NOT"):
 			fmt.Fprint(os.Stderr, "\n"+loginGuidance)
+		case cfg.Superseded():
+			fmt.Fprint(os.Stderr, "\n"+migrationGuidance)
 		}
 		return nil
 	},
@@ -128,34 +120,67 @@ func serviceAccount(ctx context.Context) string {
 	return session.Email
 }
 
-// tokenExpiry reads when the Plaud credential stops working, and says whether
-// anything renews it.
+// signInLines report which scheme the Plaud credential uses and when it lapses.
 //
-// A bearer token is a JWT valid for months that nothing here renews, so a task
-// that would discover its expiry halfway through is told now. A v3 session
-// lasts a day and buys itself another on every call, so the same date means
-// the opposite thing and is reported differently.
-func tokenExpiry() (*time.Time, bool) {
+// Which scheme it is has to be said out loud. The same date means opposite
+// things either side of v3 — a session lasts a day and buys itself another on
+// every call, a bearer token runs down for months and nothing here refreshes
+// it — so a date alone leaves a reader unable to tell a fact from a deadline.
+func signInLines() []string {
+	scheme := cfg.Scheme()
+
+	// The pointer carries the command rather than referring to what is
+	// printed underneath: a token that has already lapsed is answered with the
+	// sign-in guidance instead, and a marker pointing at a block that is not
+	// there is worse than no marker.
+	note := ""
+	if cfg.Superseded() {
+		note = "  <-- superseded: plaud login --migrate"
+	}
+	lines := []string{fmt.Sprintf("  scheme      %s%s", scheme, note)}
+
+	expiry := tokenExpiry()
+	if expiry == nil {
+		return lines
+	}
+	if scheme == config.SessionScheme {
+		// A session renews itself as it is used, so its expiry is a fact
+		// rather than a deadline and needs no warning.
+		return append(lines, fmt.Sprintf("  session     until %s, renewed as it is used",
+			expiry.Format("2006-01-02 15:04")))
+	}
+
+	left := int(time.Until(*expiry).Hours() / 24)
+	warn := ""
+	if left < 21 {
+		warn = "  <-- renew it, nothing here refreshes it"
+	}
+	return append(lines, fmt.Sprintf("  expires     %s (%d days)%s", expiry.Format("2006-01-02"), left, warn))
+}
+
+// tokenExpiry reads when the Plaud credential stops working. Which of the two
+// schemes produced that date is Scheme's to say, not this function's.
+func tokenExpiry() *time.Time {
 	if at := cfg.Session.Expiry(); at != nil {
-		return at, true
+		return at
 	}
 
 	parts := strings.Split(cfg.AccessToken, ".")
 	if len(parts) != 3 {
-		return nil, false
+		return nil
 	}
 	payload, err := base64.RawURLEncoding.DecodeString(parts[1])
 	if err != nil {
-		return nil, false
+		return nil
 	}
 	var claims struct {
 		Exp int64 `json:"exp"`
 	}
 	if json.Unmarshal(payload, &claims) != nil || claims.Exp == 0 {
-		return nil, false
+		return nil
 	}
 	at := time.Unix(claims.Exp, 0)
-	return &at, false
+	return &at
 }
 
 const loginGuidance = `Nobody is signed in to Plaud. Do it for the user, in the conversation, and ask
@@ -166,6 +191,17 @@ for the emailed code rather than their password:
   3. plaud login --email <email> --otp-token <otp_token> --code <code>
 
 An existing token can also arrive in PLAUD_TOKEN, which needs no file on disk.
+`
+
+const migrationGuidance = `This sign-in is the bearer token from before v3, and nothing renews it: when it
+lapses every call is refused until somebody signs in again. What a login hands
+over now is a session, which buys itself another on every call.
+
+Replace it, asking for the emailed code rather than the password:
+
+  1. plaud login --migrate --send-code --email <their email> --json   # prints otp_token
+  2. ask for the six digits that just arrived in their inbox
+  3. plaud login --migrate --email <email> --otp-token <otp_token> --code <code>
 `
 
 func init() {
