@@ -79,6 +79,10 @@ Two details of the cookies are worth knowing before touching this. Signing in **
 
 The bearer path stays for `login --token` and `PLAUD_TOKEN`, and for an account the migration has not reached; both are sent when both are known. `Authorization` is set only when there is a token to put in it.
 
+Which of the two a config holds is `config.Scheme()`, and `plaud doctor` names it on a line of its own rather than leaving it to be read off a date. The same expiry means opposite things either side of v3 — a session lasts a day and buys itself another on every call, a bearer token runs down for months and nothing renews it — so a date alone cannot be told from a deadline. `Superseded()` is the narrower question of whether to say anything: a bearer token in the file, which the person reading can replace, and never one in `PLAUD_TOKEN`, where there is no login to run and a session established would have nowhere to live.
+
+Replacing it is the ordinary code login, whose `saveSession` already clears the token it supersedes, so `login --migrate` is a guard rather than a second way in: it refuses when there is nothing to replace. That is what makes the reminder other commands print safe to follow without first working out whether it applies. The reminder rides with the update notice in `PersistentPostRun` and is not gated on a release being available, because what is out of date is the credential rather than the binary, and a machine already on the newest build is exactly where a token from the old scheme goes unnoticed.
+
 ## Using the Transcription Service
 
 The service is shared, and a Google account is the whole of what gets a person in: no account on the cloud it runs on, no keys to hand over. `plaud auth login` opens a browser once and keeps a refresh token; every request carries a Google identity token, which the service verifies before it does anything.

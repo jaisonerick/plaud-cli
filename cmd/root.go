@@ -31,6 +31,7 @@ var rootCmd = &cobra.Command{
 		if cmd.Name() != "update" {
 			CheckForUpdate()
 		}
+		remindTokenMigration(cmd)
 	},
 	PersistentPreRunE: func(cmd *cobra.Command, args []string) error {
 		var err error
