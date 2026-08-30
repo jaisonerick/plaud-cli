@@ -23,6 +23,27 @@ type Client struct {
 	DeviceID string
 	Debug    bool
 	HTTP     *http.Client
+
+	// Session is the v3 cookie session, when there is one. Token is the older
+	// bearer credential, which PLAUD_TOKEN and `login --token` still supply.
+	// Both are sent when both are known: which one the server honours is its
+	// business, and an account mid-migration may answer to either.
+	Session *Session
+
+	// OnSession is called whenever the session changes, which is at login and
+	// again on every refresh. A rotated cookie that is never written down
+	// leaves the next process to start from an expired one.
+	OnSession func(*Session)
+}
+
+// sessionChanged folds a response's cookies into the session and persists it.
+func (c *Client) sessionChanged(resp *http.Response) {
+	if c.Session == nil {
+		c.Session = &Session{}
+	}
+	if c.Session.readCookies(resp) && c.OnSession != nil {
+		c.OnSession(c.Session)
+	}
 }
 
 func randomHex(n int) string {
@@ -32,7 +53,20 @@ func randomHex(n int) string {
 }
 
 func (c *Client) do(ctx context.Context, req *http.Request, result interface{}) error {
-	req.Header.Set("Authorization", "Bearer "+c.Token)
+	return c.send(ctx, req, result, true)
+}
+
+// send performs one request, renewing the session and trying again when the
+// answer is 401 and there is a refresh token to renew it with. mayRefresh is
+// false on the retry and on the refresh call itself, so a server that keeps
+// refusing ends the attempt rather than looping.
+func (c *Client) send(ctx context.Context, req *http.Request, result interface{}, mayRefresh bool) error {
+	if c.Token != "" {
+		req.Header.Set("Authorization", "Bearer "+c.Token)
+	}
+	if c.Session.Valid() {
+		req.AddCookie(&http.Cookie{Name: cookieUserToken, Value: c.Session.UserToken})
+	}
 	req.Header.Set("User-Agent", "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36")
 	req.Header.Set("app-language", "en")
 	req.Header.Set("app-platform", "web")
@@ -59,10 +93,34 @@ func (c *Client) do(ctx context.Context, req *http.Request, result interface{}) 
 	}
 
 	if c.Debug {
-		fmt.Fprintf(os.Stderr, "[DEBUG] %s %s → %d\n%s\n", req.Method, req.URL, resp.StatusCode, string(body))
+		fmt.Fprintf(os.Stderr, "[DEBUG] %s %s → %d\n", req.Method, req.URL, resp.StatusCode)
+		// Which cookies a response set, never their values: a session cookie
+		// is the credential itself, and --debug output is pasted into bug
+		// reports. The name and whether it was set or cleared is what a
+		// scheme change is diagnosed from.
+		for _, ck := range resp.Cookies() {
+			state := "cleared"
+			if ck.Value != "" {
+				state = fmt.Sprintf("set, %d bytes", len(ck.Value))
+			}
+			fmt.Fprintf(os.Stderr, "[DEBUG] Set-Cookie: %s (%s) Path=%s Domain=%s\n",
+				ck.Name, state, ck.Path, ck.Domain)
+		}
+		fmt.Fprintf(os.Stderr, "%s\n", string(body))
 	}
 
+	c.sessionChanged(resp)
+
 	if resp.StatusCode == 401 {
+		if mayRefresh && c.Session.Renewable() {
+			if err := c.refresh(ctx); err == nil {
+				retry, rerr := rewind(req)
+				if rerr != nil {
+					return rerr
+				}
+				return c.send(ctx, retry, result, false)
+			}
+		}
 		return &APIError{Status: 401, Msg: "Session expired. Run 'plaud login' again."}
 	}
 
@@ -241,5 +299,55 @@ func (c *Client) DownloadFile(ctx context.Context, fileURL, destPath string) err
 		return fmt.Errorf("writing file: %w", err)
 	}
 
+	return nil
+}
+
+// rewind returns a fresh copy of a request whose body has already been read,
+// so a call refused for a stale session can be made again once it is renewed.
+// Requests built by Do and PostForm carry GetBody, because their bodies are
+// readers the stdlib knows how to replay; one without it cannot be retried.
+func rewind(req *http.Request) (*http.Request, error) {
+	clone := req.Clone(req.Context())
+	clone.Header.Del("Cookie")
+
+	if req.Body == nil {
+		return clone, nil
+	}
+	if req.GetBody == nil {
+		return nil, fmt.Errorf("the session was renewed but this request cannot be sent again")
+	}
+	body, err := req.GetBody()
+	if err != nil {
+		return nil, fmt.Errorf("replaying the request after renewing the session: %w", err)
+	}
+	clone.Body = body
+	return clone, nil
+}
+
+// refresh buys a new user token with the refresh one.
+//
+// The refresh cookie is scoped by the server to this route alone, so it is
+// sent here and nowhere else; the new cookies arrive on the response and are
+// picked up like any other.
+func (c *Client) refresh(ctx context.Context) error {
+	if !c.Session.Renewable() {
+		return fmt.Errorf("no refresh token")
+	}
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.BaseURL+refreshPath, strings.NewReader("{}"))
+	if err != nil {
+		return fmt.Errorf("creating the refresh request: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.AddCookie(&http.Cookie{Name: cookieRefreshToken, Value: c.Session.RefreshToken})
+
+	var resp SessionResponse
+	if err := c.send(ctx, req, &resp, false); err != nil {
+		return err
+	}
+	c.Session.take(resp)
+	if c.OnSession != nil {
+		c.OnSession(c.Session)
+	}
 	return nil
 }

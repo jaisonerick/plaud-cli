@@ -26,14 +26,6 @@ type OTPLoginRequest struct {
 	RequireSetPassword bool   `json:"require_set_password"`
 }
 
-// OTPLoginResponse is returned by POST /auth/otp-login.
-type OTPLoginResponse struct {
-	Envelope
-	AccessToken string `json:"access_token"`
-	TokenType   string `json:"token_type"`
-	IsNewUser   bool   `json:"is_new_user"`
-}
-
 // SendCode requests a sign-in code to be sent to the given email.
 // Returns an OTP token that must be passed to VerifyCode.
 func (c *Client) SendCode(ctx context.Context, email string) (string, error) {
@@ -60,38 +52,31 @@ type SecurityConfigResponse struct {
 	} `json:"data"`
 }
 
-// PasswordLoginResponse is returned by POST /auth/access-token.
-type PasswordLoginResponse struct {
-	Envelope
-	AccessToken string `json:"access_token"`
-	TokenType   string `json:"token_type"`
-}
-
 // PasswordLogin exchanges an email and password for an access token.
 //
 // The password never travels in the clear: the server publishes a public key
 // and only accepts a sealed envelope (see EncryptPassword). The key is fetched
 // per login rather than cached, because a rotation on the server would
 // otherwise turn every login into an unexplained "wrong password".
-func (c *Client) PasswordLogin(ctx context.Context, email, password string) (string, error) {
+func (c *Client) PasswordLogin(ctx context.Context, email, password string) (*Session, error) {
 	var config SecurityConfigResponse
 	if err := c.Do(ctx, "GET", "/config/security", nil, &config); err != nil {
-		return "", fmt.Errorf("fetching the server's public key: %w", err)
+		return nil, fmt.Errorf("fetching the server's public key: %w", err)
 	}
 	if config.Data.PassPubKey == "" {
-		return "", fmt.Errorf("the server published no public key to seal the password with")
+		return nil, fmt.Errorf("the server published no public key to seal the password with")
 	}
 	if config.Data.PassAlgorithm != "secp256k1" {
-		return "", fmt.Errorf("the server expects %q, which this client cannot produce; upgrade plaud",
+		return nil, fmt.Errorf("the server expects %q, which this client cannot produce; upgrade plaud",
 			config.Data.PassAlgorithm)
 	}
 
 	sealed, err := EncryptPassword(config.Data.PassPubKey, password)
 	if err != nil {
-		return "", err
+		return nil, err
 	}
 
-	var resp PasswordLoginResponse
+	var resp SessionResponse
 	err = c.PostForm(ctx, "/auth/access-token", url.Values{
 		"username":           {email},
 		"password":           {sealed},
@@ -99,16 +84,13 @@ func (c *Client) PasswordLogin(ctx context.Context, email, password string) (str
 		"password_encrypted": {"true"},
 	}, &resp)
 	if err != nil {
-		return "", err
+		return nil, err
 	}
-	if resp.AccessToken == "" {
-		return "", fmt.Errorf("login succeeded but returned no access token")
-	}
-	return resp.AccessToken, nil
+	return c.established(resp)
 }
 
-// VerifyCode exchanges the OTP token + code for an access token.
-func (c *Client) VerifyCode(ctx context.Context, otpToken, code string) (string, error) {
+// VerifyCode exchanges the OTP token + code for a session.
+func (c *Client) VerifyCode(ctx context.Context, otpToken, code string) (*Session, error) {
 	req := OTPLoginRequest{
 		Code:               code,
 		Token:              otpToken,
@@ -116,10 +98,29 @@ func (c *Client) VerifyCode(ctx context.Context, otpToken, code string) (string,
 		RequireSetPassword: true,
 	}
 
-	var resp OTPLoginResponse
+	var resp SessionResponse
 	if err := c.Do(ctx, "POST", "/auth/otp-login", req, &resp); err != nil {
-		return "", err
+		return nil, err
 	}
+	return c.established(resp)
+}
 
-	return resp.AccessToken, nil
+// established reports what a login actually produced.
+//
+// The check is worth making at every door: a v3 server answers "success" with
+// every token field empty, so a client reading the body alone stores nothing
+// and says it worked. What makes the session is the cookies, which do() has
+// already folded in by the time this runs.
+func (c *Client) established(resp SessionResponse) (*Session, error) {
+	if c.Session == nil {
+		c.Session = &Session{}
+	}
+	c.Session.take(resp)
+
+	if !c.Session.Valid() {
+		return nil, fmt.Errorf("the server accepted the login but handed over nothing to authenticate with "+
+			"(version_tag=%q, token_id=%q, no session cookie): this client is too old for the scheme it answered with",
+			resp.VersionTag, resp.TokenID)
+	}
+	return c.Session, nil
 }

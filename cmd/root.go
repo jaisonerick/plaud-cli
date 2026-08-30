@@ -45,6 +45,17 @@ var rootCmd = &cobra.Command{
 			DeviceID: cfg.EnsureDeviceID(),
 			Debug:    debug,
 			HTTP:     &http.Client{},
+			Session:  cfg.Session,
+			// A session renewed mid-command is worth writing down there and
+			// then: the cookie that was refused is gone either way, and a
+			// process that exits without saving the new one leaves the next
+			// one to start from the expired one it just replaced.
+			OnSession: func(s *api.Session) {
+				cfg.Session = s
+				if err := cfg.Save(); err != nil {
+					fmt.Fprintf(os.Stderr, "warning: the session was renewed but could not be saved: %v\n", err)
+				}
+			},
 		}
 
 		return nil

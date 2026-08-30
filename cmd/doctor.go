@@ -42,13 +42,21 @@ task, so they are reported on separate lines.`,
 			fmt.Sprintf("  plaud       %s", plaud),
 			fmt.Sprintf("  service     %s", service),
 		}
-		if expiry := tokenExpiry(); expiry != nil {
-			left := int(time.Until(*expiry).Hours() / 24)
-			warn := ""
-			if left < 21 {
-				warn = "  <-- renew it, nothing here refreshes it"
+		if expiry, renewed := tokenExpiry(); expiry != nil {
+			switch {
+			case renewed:
+				// A session renews itself as it is used, so its expiry is a
+				// fact rather than a deadline and needs no warning.
+				lines = append(lines, fmt.Sprintf("  session     until %s, renewed as it is used",
+					expiry.Format("2006-01-02 15:04")))
+			default:
+				left := int(time.Until(*expiry).Hours() / 24)
+				warn := ""
+				if left < 21 {
+					warn = "  <-- renew it, nothing here refreshes it"
+				}
+				lines = append(lines, fmt.Sprintf("  expires     %s (%d days)%s", expiry.Format("2006-01-02"), left, warn))
 			}
-			lines = append(lines, fmt.Sprintf("  expires     %s (%d days)%s", expiry.Format("2006-01-02"), left, warn))
 		}
 
 		declared := "none — nothing declares where a transcript belongs here"
@@ -120,26 +128,34 @@ func serviceAccount(ctx context.Context) string {
 	return session.Email
 }
 
-// tokenExpiry reads when the Plaud token stops working. It is a JWT valid for
-// months and nothing here renews it, so a task that would discover this
-// halfway through is told now.
-func tokenExpiry() *time.Time {
+// tokenExpiry reads when the Plaud credential stops working, and says whether
+// anything renews it.
+//
+// A bearer token is a JWT valid for months that nothing here renews, so a task
+// that would discover its expiry halfway through is told now. A v3 session
+// lasts a day and buys itself another on every call, so the same date means
+// the opposite thing and is reported differently.
+func tokenExpiry() (*time.Time, bool) {
+	if at := cfg.Session.Expiry(); at != nil {
+		return at, true
+	}
+
 	parts := strings.Split(cfg.AccessToken, ".")
 	if len(parts) != 3 {
-		return nil
+		return nil, false
 	}
 	payload, err := base64.RawURLEncoding.DecodeString(parts[1])
 	if err != nil {
-		return nil
+		return nil, false
 	}
 	var claims struct {
 		Exp int64 `json:"exp"`
 	}
 	if json.Unmarshal(payload, &claims) != nil || claims.Exp == 0 {
-		return nil
+		return nil, false
 	}
 	at := time.Unix(claims.Exp, 0)
-	return &at
+	return &at, false
 }
 
 const loginGuidance = `Nobody is signed in to Plaud. Do it for the user, in the conversation, and ask

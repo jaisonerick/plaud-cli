@@ -7,6 +7,7 @@ import (
 	"os"
 	"strings"
 
+	"github.com/jaisonerick/plaud-cli/internal/api"
 	"github.com/spf13/cobra"
 )
 
@@ -92,13 +93,13 @@ is set in the Plaud app, so those accounts use the code flow.`,
 		// If the handle and the code are both known, there is nothing to prompt for.
 		if otpToken != "" && code != "" {
 			fmt.Print("Authenticating... ")
-			token, err := client.VerifyCode(ctx, otpToken, code)
+			session, err := client.VerifyCode(ctx, otpToken, code)
 			if err != nil {
 				fmt.Println("failed.")
 				return fmt.Errorf("login failed: %w", err)
 			}
 			fmt.Println("ok.")
-			return saveToken(token)
+			return saveSession(session)
 		}
 
 		// Step 1: get email
@@ -130,14 +131,14 @@ is set in the Plaud app, so those accounts use the code flow.`,
 
 		// Step 4: verify
 		fmt.Print("Authenticating... ")
-		token, err := client.VerifyCode(ctx, otp, code)
+		session, err := client.VerifyCode(ctx, otp, code)
 		if err != nil {
 			fmt.Println("failed.")
 			return fmt.Errorf("login failed: %w", err)
 		}
 		fmt.Println("ok.")
 
-		return saveToken(token)
+		return saveSession(session)
 	},
 }
 
@@ -162,13 +163,13 @@ func passwordLogin(cmd *cobra.Command, email string) error {
 	}
 
 	fmt.Print("Authenticating... ")
-	token, err := client.PasswordLogin(cmd.Context(), email, password)
+	session, err := client.PasswordLogin(cmd.Context(), email, password)
 	if err != nil {
 		fmt.Println("failed.")
 		return err
 	}
 	fmt.Println("ok.")
-	return saveToken(token)
+	return saveSession(session)
 }
 
 // readPassword takes the password from the environment or from stdin.
@@ -191,8 +192,32 @@ func readPassword() (string, error) {
 	return password, nil
 }
 
+// saveToken records a bearer token handed over from somewhere else, which is
+// what --token and PLAUD_TOKEN carry.
 func saveToken(token string) error {
 	cfg.AccessToken = token
+	return persist("Token saved. You're logged in.")
+}
+
+// saveSession records what a login produced. From v3 that is a pair of
+// cookies rather than a bearer token, so there is nothing to put in
+// AccessToken and the old one is cleared rather than left to be sent
+// alongside a session it has nothing to do with.
+func saveSession(session *api.Session) error {
+	cfg.Session = session
+	if session.Valid() {
+		cfg.AccessToken = ""
+	}
+
+	line := "Signed in."
+	if at := session.Expiry(); at != nil {
+		line = fmt.Sprintf("Signed in. The session lasts until %s, and is renewed as it is used.",
+			at.Format("2006-01-02 15:04"))
+	}
+	return persist(line)
+}
+
+func persist(said string) error {
 	cfg.BaseURL = client.BaseURL
 	cfg.EnsureDeviceID()
 
@@ -200,7 +225,7 @@ func saveToken(token string) error {
 		return fmt.Errorf("saving config: %w", err)
 	}
 
-	fmt.Println("Token saved. You're logged in.")
+	fmt.Println(said)
 	return nil
 }
 
