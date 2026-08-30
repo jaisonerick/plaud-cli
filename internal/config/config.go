@@ -8,6 +8,8 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+
+	"github.com/jaisonerick/plaud-cli/internal/api"
 )
 
 const configDir = ".config/plaud"
@@ -19,6 +21,17 @@ type Config struct {
 	BaseURL     string `json:"base_url"`
 	DeviceID    string `json:"device_id"`
 	WhisperURL  string `json:"whisper_url,omitempty"`
+
+	// Session is what the v3 API hands over instead of a bearer token: a
+	// cookie that authenticates and a second one that renews it. AccessToken
+	// stays for PLAUD_TOKEN and `login --token`, and for an account the
+	// migration has not reached.
+	Session *api.Session `json:"session,omitempty"`
+}
+
+// Authenticated reports whether there is anything here to make a call with.
+func (c *Config) Authenticated() bool {
+	return c.AccessToken != "" || c.Session.Valid()
 }
 
 func configPath() (string, error) {

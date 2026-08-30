@@ -69,7 +69,15 @@ Three ways in, in `cmd/login.go`:
 
 Accounts created through Google, Apple or Microsoft SSO have no password until one is set in the Plaud app, so the password flow does not apply to them.
 
-`/auth/access-token` also returns a `refresh_token` and expiry fields, which this client currently ignores. Access tokens last months and nothing here renews them.
+### The v3 session
+
+**From `version_tag: "v3"`, a login returns no token at all.** `access_token` and `refresh_token` come back as empty strings on purpose, and the credential arrives as an httpOnly cookie: `pld_ut` authenticates every request, and `pld_urt` buys a new one, scoped by the server to `/auth/refresh-user-token` so it is sent nowhere else. The body carries only a `token_id`, which names the session without being usable as one, and the expiries `ut_expire_at` and `urt_expire_at`.
+
+A client that reads `access_token` and ignores `Set-Cookie` therefore stores an empty string, prints that the login worked, and is refused by every later call — which is what happened, and reads as an expired session rather than as a client too old for the scheme. `established()` is the guard: a login that hands over nothing to authenticate with is an error at the door, not three commands later.
+
+Two details of the cookies are worth knowing before touching this. Signing in **clears both cookies across every domain and path it might previously have used and only then sets the real ones**, so the same response carries nine clears and two sets; reading a cleared cookie as a logout throws away the session being established. And a user token lasts a day rather than months, so it is renewed rather than replaced: a 401 with a refresh token in hand renews the session and repeats the call once, and the renewed cookie is saved the moment it arrives, because a rotation nobody writes down leaves the next process starting from the one it just replaced.
+
+The bearer path stays for `login --token` and `PLAUD_TOKEN`, and for an account the migration has not reached; both are sent when both are known. `Authorization` is set only when there is a token to put in it.
 
 ## Using the Transcription Service
 
