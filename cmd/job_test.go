@@ -5,6 +5,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/jaisonerick/plaud-cli/internal/transcript"
 )
 
 func TestContextTakesTheDescriptionItself(t *testing.T) {
@@ -106,5 +108,46 @@ func TestAgreedNameIgnoresAVoiceNobodyCanPlace(t *testing.T) {
 
 	if split || got != "Amanda Destro (Aurora)" {
 		t.Errorf("got %q, split %v", got, split)
+	}
+}
+
+func TestRuledOutTakesANameWhoseEveryVoiceIsOutOfTheMeeting(t *testing.T) {
+	voices := transcript.VoiceBlock{
+		"SPEAKER_00": {"v_aaa"},
+		"SPEAKER_01": {"v_bbb", "v_ccc"},
+	}
+
+	out, disputed := ruledOut(voices, map[string]bool{"v_bbb": true, "v_ccc": true})
+
+	if !out["SPEAKER_01"] || out["SPEAKER_00"] {
+		t.Errorf("ruled out %v", out)
+	}
+	if len(disputed) != 0 {
+		t.Errorf("a name every voice of which is out was reported as disputed: %v", disputed)
+	}
+}
+
+// A turn says only the name, so there is no way to drop half of what is
+// written under one.
+func TestRuledOutLeavesANameWhoseVoicesDisagree(t *testing.T) {
+	voices := transcript.VoiceBlock{"SPEAKER_01": {"v_bbb", "v_ccc"}}
+
+	out, disputed := ruledOut(voices, map[string]bool{"v_bbb": true})
+
+	if len(out) != 0 {
+		t.Errorf("turns were dropped on half a name: %v", out)
+	}
+	if len(disputed) != 1 || disputed[0] != "SPEAKER_01" {
+		t.Errorf("the name nobody can settle was reported as %v", disputed)
+	}
+}
+
+func TestRuledOutTakesNothingWhenNobodyWasRuledOut(t *testing.T) {
+	voices := transcript.VoiceBlock{"Jaison Erick (NexaEdge)": {"v_aaa"}}
+
+	out, disputed := ruledOut(voices, map[string]bool{"v_aaa": false})
+
+	if len(out) != 0 || len(disputed) != 0 {
+		t.Errorf("ruled out %v, disputed %v", out, disputed)
 	}
 }

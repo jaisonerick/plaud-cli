@@ -26,6 +26,7 @@ type report struct {
 	Written        bool              `json:"written"`
 	Source         string            `json:"source"`
 	Renamed        int               `json:"renamed,omitempty"`
+	Dropped        int               `json:"dropped,omitempty"`
 	Language       *modal.Language   `json:"language,omitempty"`
 	Speakers       map[string]string `json:"speakers,omitempty"`
 	Sparse         bool              `json:"sparse,omitempty"`
@@ -144,10 +145,13 @@ func (j job) refreshNames(ctx context.Context, whisper *modal.HTTPClient) error 
 	}
 	names := map[string]string{}
 	settledIDs := map[string]string{}
+	outside := map[string]bool{}
 	for _, voice := range found {
 		names[voice.Key] = voice.Name
+		outside[voice.Key] = voice.Outside
 		if voice.Voice != "" {
 			names[voice.Voice] = voice.Name
+			outside[voice.Voice] = voice.Outside
 			settledIDs[voice.Key] = voice.Voice
 		}
 	}
@@ -174,6 +178,14 @@ func (j job) refreshNames(ctx context.Context, whisper *modal.HTTPClient) error 
 		voices[written] = known
 	}
 
+	ruled, disputed := ruledOut(voices, outside)
+	for _, written := range disputed {
+		fmt.Fprintf(os.Stderr, "%s: part of what is written as %q is out of the meeting and part of it is not, and a turn says only the name, so they stand\n", j.dest, written)
+	}
+	for written := range ruled {
+		delete(voices, written)
+	}
+
 	rename := map[string]string{}
 	for written, ids := range voices {
 		settled, split := agreedName(ids, names)
@@ -185,7 +197,7 @@ func (j job) refreshNames(ctx context.Context, whisper *modal.HTTPClient) error 
 			rename[written] = settled
 		}
 	}
-	if len(rename) == 0 && kept {
+	if len(rename) == 0 && len(ruled) == 0 && kept {
 		if j.alone {
 			fmt.Fprintf(os.Stderr, "%s already names every voice the service can place.\n", j.dest)
 		}
@@ -194,12 +206,20 @@ func (j job) refreshNames(ctx context.Context, whisper *modal.HTTPClient) error 
 	}
 
 	lines := map[int]string{}
+	dropping := map[int]bool{}
 	for _, turn := range turns {
+		if ruled[turn.Speaker] {
+			dropping[turn.Line] = true
+			continue
+		}
 		if name, ok := rename[turn.Speaker]; ok {
 			lines[turn.Line] = name
 		}
 	}
+	// Renaming leaves the file the same length, so the lines a drop was worked
+	// out from still hold; doing it the other way round would not.
 	updated, renamed := transcript.RewriteSpeakers(string(content), lines)
+	updated, dropped := transcript.DropTurns(updated, dropping)
 	for written, settled := range rename {
 		voices.Rename(written, settled)
 	}
@@ -208,12 +228,17 @@ func (j job) refreshNames(ctx context.Context, whisper *modal.HTTPClient) error 
 	if err := os.WriteFile(j.dest, []byte(updated), 0644); err != nil {
 		return fmt.Errorf("writing %s: %w", j.dest, err)
 	}
-	if renamed == 0 {
+	if dropped > 0 {
+		fmt.Fprintf(os.Stderr, "Dropped %d turn(s) the meeting did not hold from %s\n", dropped, j.dest)
+	}
+	if renamed == 0 && dropped == 0 {
 		fmt.Fprintf(os.Stderr, "Wrote down which voice each name in %s stands for\n", j.dest)
 		return nil
 	}
-	fmt.Fprintf(os.Stderr, "Named %d turn(s) in %s\n", renamed, j.dest)
-	say(report{Recording: j.recording.ID, Path: j.dest, Source: "on disk", Renamed: renamed})
+	if renamed > 0 {
+		fmt.Fprintf(os.Stderr, "Named %d turn(s) in %s\n", renamed, j.dest)
+	}
+	say(report{Recording: j.recording.ID, Path: j.dest, Source: "on disk", Renamed: renamed, Dropped: dropped})
 	return nil
 }
 
@@ -227,6 +252,34 @@ func labelsAsVoices(turns []transcript.Turn) transcript.VoiceBlock {
 		}
 	}
 	return voices
+}
+
+// ruledOut is the names in a transcript whose every voice the meeting did not
+// hold, and the names where that is true of some of them and not others.
+//
+// A turn says only the name, so a name holding one voice ruled out and one
+// that stands cannot lose half its turns: it is left whole and reported, for
+// somebody to settle.
+func ruledOut(voices transcript.VoiceBlock, outside map[string]bool) (map[string]bool, []string) {
+	out := map[string]bool{}
+	var disputed []string
+	for written, ids := range voices {
+		gone := 0
+		for _, id := range ids {
+			if outside[id] {
+				gone++
+			}
+		}
+		switch {
+		case gone == 0:
+		case gone < len(ids):
+			disputed = append(disputed, written)
+		default:
+			out[written] = true
+		}
+	}
+	sort.Strings(disputed)
+	return out, disputed
 }
 
 // agreedName is who a name in the file stands for, when every voice written

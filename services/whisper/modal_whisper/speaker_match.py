@@ -55,6 +55,25 @@ class SpeakerMatcher:
         return mapping
 
 
+def ranked(
+    embedding: list[float],
+    known_samples: list[tuple[int, str, list[float]]],
+    limit: int = 3,
+) -> list[tuple[str, float]]:
+    """The people this voice sounds most like, nearest first, once each.
+
+    A person is as far away as their closest voice: several recordings of one
+    person are several readings of the same thing, and the worst of them says
+    nothing about whether this is them.
+    """
+    closest: dict[str, float] = {}
+    for _, name, known in known_samples:
+        distance = _cosine_distance(embedding, known)
+        if name not in closest or distance < closest[name]:
+            closest[name] = distance
+    return sorted(closest.items(), key=lambda pair: pair[1])[:limit]
+
+
 def nearest(
     embedding: list[float], known_samples: list[tuple[int, str, list[float]]]
 ) -> tuple[str, float] | None:
@@ -64,13 +83,57 @@ def nearest(
     person once: a diarization that split one person into two labels is a real
     thing, and both halves are that person.
     """
-    if not known_samples:
+    hits = ranked(embedding, known_samples, limit=1)
+    return hits[0] if hits else None
+
+
+def contradiction(
+    embedding: list[float],
+    claimed: list[list[float]],
+    known_samples: list[tuple[int, str, list[float]]],
+    threshold: float = DEFAULT_THRESHOLD,
+) -> tuple[str, float, float] | None:
+    """Who the store already holds this voice as, when that is not who it was
+    given to. Returns (that person, how far they are, how far the claimed one
+    is), or None when nothing contradicts the name.
+
+    Both halves have to say so: the voice is nowhere near the person it was
+    given to, and it is confidently somebody else. A voice matching nobody is a
+    voice nobody has taught yet, and refusing that would leave a real person
+    unnameable until somebody deleted a row.
+    """
+    if not claimed:
         return None
-    name, distance = min(
-        ((name, _cosine_distance(embedding, known)) for _, name, known in known_samples),
-        key=lambda pair: pair[1],
-    )
-    return name, distance
+    hit = nearest(embedding, known_samples)
+    if hit is None or hit[1] >= threshold:
+        return None
+    to_claimed = min(_cosine_distance(embedding, vector) for vector in claimed)
+    if to_claimed < threshold:
+        return None
+    return hit[0], hit[1], to_claimed
+
+
+def alike(
+    voices: list[tuple[str, list[float]]], threshold: float = DEFAULT_THRESHOLD
+) -> dict[str, list[tuple[str, float]]]:
+    """Which of these voices are one voice, by the measure that decides whether
+    a voice is somebody already known.
+
+    Diarization separates one person into two labels as readily as it merges
+    two people into one, and it does that per recording, so the same person
+    turns up unnamed in several transcripts at once. Naming one of those then
+    answers for all of them.
+    """
+    together: dict[str, list[tuple[str, float]]] = {key: [] for key, _ in voices}
+    for i, (key, vector) in enumerate(voices):
+        for other, other_vector in voices[i + 1 :]:
+            distance = _cosine_distance(vector, other_vector)
+            if distance < threshold:
+                together[key].append((other, distance))
+                together[other].append((key, distance))
+    for held in together.values():
+        held.sort(key=lambda pair: pair[1])
+    return together
 
 
 def _cosine_distance(a: list[float], b: list[float]) -> float:

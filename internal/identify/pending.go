@@ -28,6 +28,14 @@ type Voice struct {
 	Samples   []Sample `json:"samples"`
 }
 
+// Key names this voice to the service, which knows a label only alongside the
+// recording it was one run's numbering of.
+func (v Voice) Key() string { return KeyOf(v.Recording, v.ID) }
+
+// KeyOf pairs a recording with one of its voices. A voice id identifies itself,
+// but a label is one run's numbering and means nothing without the recording.
+func KeyOf(recording, id string) string { return recording + "/" + id }
+
 // Sample is a stretch of the recording where that voice is the one speaking.
 type Sample struct {
 	StartSec float64 `json:"start_sec"`
@@ -172,23 +180,9 @@ func samplesOf(speaker string, turns []transcript.Turn, content string) []Sample
 	return samples
 }
 
-// said is what a turn's line is followed by, which is the speech itself.
+// said is a turn's speech, cut to what places a voice rather than reproduces it.
 func said(lines []string, header int) string {
-	var spoken []string
-	for i := header + 1; i < len(lines); i++ {
-		line := strings.TrimSpace(lines[i])
-		if line == "" {
-			if len(spoken) > 0 {
-				break
-			}
-			continue
-		}
-		if strings.HasPrefix(line, "**") {
-			break
-		}
-		spoken = append(spoken, line)
-	}
-	text := strings.Join(spoken, " ")
+	text := strings.Join(transcript.SpeechOf(lines, header), " ")
 	if len(text) > 300 {
 		text = strings.TrimSpace(text[:300]) + "…"
 	}

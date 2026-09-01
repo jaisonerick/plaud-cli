@@ -353,6 +353,9 @@ func classifyServerError(status int, body []byte) error {
 	}
 	// The service explains a refusal in words meant for whoever typed the
 	// command; repeating the status code over them helps nobody.
+	if status == http.StatusConflict {
+		return Contradiction{Detail: detailOf(body)}
+	}
 	if status == http.StatusNotFound || status == http.StatusBadRequest {
 		return fmt.Errorf("%s", detailOf(body))
 	}

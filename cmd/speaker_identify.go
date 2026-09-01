@@ -3,6 +3,7 @@ package cmd
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"sort"
@@ -142,9 +143,14 @@ everyone else using the service too.`,
 		}
 		sort.Strings(names)
 
+		heard, threshold := listen(ctx, whisper, voices)
+		asking, ruled := partition(voices, heard)
+
 		named, err := identify.RunServer(ctx, identify.Config{
-			Voices: voices,
-			Known:  names,
+			Voices:    asking,
+			Known:     names,
+			Heard:     heard,
+			Threshold: threshold,
 			Audio: func(ctx context.Context, recording string) ([]byte, error) {
 				url, err := client.GetTempURL(ctx, recording)
 				if err != nil {
@@ -152,28 +158,93 @@ everyone else using the service too.`,
 				}
 				return client.FetchFile(ctx, url, nil)
 			},
-			Name: func(ctx context.Context, v identify.Voice, name, company string, surnameUnknown bool) (string, error) {
-				person, err := whisper.NameSpeaker(ctx, v.Recording, v.ID, name, company, surnameUnknown)
+			Name: func(ctx context.Context, v identify.Voice, name, company string, surnameUnknown, despiteTimbre bool) (string, error) {
+				person, err := whisper.NameSpeaker(ctx, v.Recording, v.ID, name, company, surnameUnknown, despiteTimbre)
+				var contradicted modal.Contradiction
+				if errors.As(err, &contradicted) {
+					return "", identify.Refused{Reason: contradicted.Detail, Overridable: true}
+				}
 				if err != nil {
 					return "", err
 				}
 				return person.Display(), nil
 			},
+			Outside: func(ctx context.Context, v identify.Voice, reason string) error {
+				_, err := whisper.MarkOutside(ctx, v.Recording, v.ID, reason)
+				return err
+			},
 		})
 		if err != nil {
 			return err
 		}
+		named = append(ruled, named...)
 		if len(named) == 0 {
-			fmt.Fprintln(os.Stderr, "Nothing was named.")
+			fmt.Fprintln(os.Stderr, "Nothing was settled.")
 			return nil
 		}
 
-		fmt.Fprintf(os.Stderr, "\n%d voice(s) named:\n", len(named))
+		fmt.Fprintf(os.Stderr, "\n%d voice(s) settled:\n", len(named))
 		for _, settled := range named {
+			if settled.Outside {
+				fmt.Fprintf(os.Stderr, "  %s was not part of the meeting\n", settled.Voice.Label)
+				continue
+			}
 			fmt.Fprintf(os.Stderr, "  %s is %s\n", settled.Voice.Label, settled.Person)
 		}
 		return settleFiles(ctx, whisper, r.Root, named)
 	},
+}
+
+// listen asks the service what it already hears in the voices nobody has
+// named: who each one resembles, and which of them are one voice.
+//
+// One request, no audio and no decoding. A service too old to answer leaves
+// the page taking names without the comparison, which is the page there was
+// before: refusing to open it would be the one outcome nobody is helped by.
+func listen(ctx context.Context, whisper *modal.HTTPClient, voices []identify.Voice) (map[string]identify.Heard, float64) {
+	refs := make([]modal.VoiceRef, 0, len(voices))
+	for _, voice := range voices {
+		refs = append(refs, modal.VoiceRef{Recording: voice.Recording, Key: voice.ID})
+	}
+
+	answered, threshold, err := whisper.Resembles(ctx, refs)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "The service could not compare these voices (%v);\n"+
+			"the page will take names without saying who they sound like.\n", err)
+		return nil, 0
+	}
+
+	heard := make(map[string]identify.Heard, len(answered))
+	for _, voice := range answered {
+		same := map[string]float64{}
+		for _, other := range voice.SameAs {
+			same[identify.KeyOf(other.Recording, other.Key)] = other.Distance
+		}
+		resembles := make([]identify.Resemblance, 0, len(voice.Resembles))
+		for _, person := range voice.Resembles {
+			resembles = append(resembles, identify.Resemblance{Name: person.Name, Distance: person.Distance})
+		}
+		heard[identify.KeyOf(voice.Recording, voice.Key)] = identify.Heard{
+			Outside: voice.Outside, Resembles: resembles, Same: same,
+		}
+	}
+	return heard, threshold
+}
+
+// partition keeps the page to the voices somebody still has to decide about.
+// A voice already ruled out of the room needs no decision and still needs its
+// turns taken out of the transcript, which is what the run does at the end.
+func partition(voices []identify.Voice, heard map[string]identify.Heard) ([]identify.Voice, identify.Named) {
+	var asking []identify.Voice
+	var ruled identify.Named
+	for _, voice := range voices {
+		if heard[voice.Key()].Outside {
+			ruled = append(ruled, identify.Settled{Voice: voice, Outside: true})
+			continue
+		}
+		asking = append(asking, voice)
+	}
+	return asking, ruled
 }
 
 // settleFiles rewrites the transcripts a naming touched. The service is what

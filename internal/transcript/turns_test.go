@@ -92,3 +92,71 @@ func TestRewriteSpeakersDoesNotTouchTheFileForANameItAlreadyHas(t *testing.T) {
 		t.Errorf("the file was rewritten with nothing to change: %d turn(s)", renamed)
 	}
 }
+
+func TestDropTurnsTakesTheTurnAndTheBlankLineClosingIt(t *testing.T) {
+	turns := ReadTurns(filed)
+
+	got, dropped := DropTurns(filed, map[int]bool{turns[1].Line: true})
+
+	if dropped != 1 {
+		t.Fatalf("dropped %d turn(s), want 1", dropped)
+	}
+	if strings.Contains(got, "Opa, beleza?") {
+		t.Error("the speech of the dropped turn survived")
+	}
+	if strings.Contains(got, "(00:00:39)") {
+		t.Error("the header of the dropped turn survived")
+	}
+	if !strings.Contains(got, "**Jaison Erick (NexaEdge)** (00:00:37):\nFala, Pedro.\n\n**Aline") {
+		t.Errorf("the turns around it did not close up:\n%s", got)
+	}
+}
+
+func TestDropTurnsLeavesTheRestOfTheFileAsItWas(t *testing.T) {
+	turns := ReadTurns(filed)
+
+	got, _ := DropTurns(filed, map[int]bool{turns[3].Line: true})
+
+	if !strings.Contains(got, `title: "Semanal de 13/08"`) {
+		t.Error("the front matter was dropped with the turn")
+	}
+	if !strings.Contains(got, "Não, não, não.") {
+		t.Error("a turn nobody asked about went with it")
+	}
+}
+
+// A transcript gains headings and notes after it is filed, and they sit
+// between the turns: a turn ends at the blank line after its speech, never at
+// whatever comes next.
+func TestDropTurnsKeepsWhatSomebodyWroteAfterTheLastTurn(t *testing.T) {
+	annotated := filed + "\n## Combinados\n\nFechar o lote hoje.\n"
+	turns := ReadTurns(annotated)
+
+	got, dropped := DropTurns(annotated, map[int]bool{turns[3].Line: true})
+
+	if dropped != 1 {
+		t.Fatalf("dropped %d turn(s), want 1", dropped)
+	}
+	if !strings.Contains(got, "## Combinados") || !strings.Contains(got, "Fechar o lote hoje.") {
+		t.Errorf("the section after the turn went with it:\n%s", got)
+	}
+}
+
+func TestDropTurnsIgnoresALineThatIsNotATurn(t *testing.T) {
+	got, dropped := DropTurns(filed, map[int]bool{1: true})
+
+	if dropped != 0 || got != filed {
+		t.Errorf("dropped %d line(s) that hold no turn", dropped)
+	}
+}
+
+func TestSpeechOfIsTheLinesUnderTheHeader(t *testing.T) {
+	lines := strings.Split(filed, "\n")
+	turns := ReadTurns(filed)
+
+	spoken := SpeechOf(lines, turns[2].Line)
+
+	if len(spoken) != 1 || spoken[0] != "Não, não, não." {
+		t.Errorf("read %q as the speech of a turn", spoken)
+	}
+}

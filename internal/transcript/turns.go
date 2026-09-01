@@ -50,6 +50,74 @@ func ReadTurns(content string) []Turn {
 	return turns
 }
 
+// SpeechOf is what a turn's header line is followed by: the speech itself.
+func SpeechOf(lines []string, header int) []string {
+	var spoken []string
+	for i := header + 1; i < turnEnd(lines, header); i++ {
+		if line := strings.TrimSpace(lines[i]); line != "" {
+			spoken = append(spoken, line)
+		}
+	}
+	return spoken
+}
+
+// turnEnd is the line one past the turn a header opens: its speech, and the
+// blank line closing it. A turn ends at the blank line after its text, so a
+// heading or a note somebody wrote between two turns belongs to neither.
+func turnEnd(lines []string, header int) int {
+	said := false
+	end := header + 1
+	for ; end < len(lines); end++ {
+		line := strings.TrimSpace(lines[end])
+		if line == "" {
+			if said {
+				return end + 1
+			}
+			continue
+		}
+		if turnHeader.MatchString(lines[end]) {
+			return end
+		}
+		said = true
+	}
+	return end
+}
+
+// DropTurns removes whole turns and leaves every other byte as it was.
+//
+// A voice the meeting did not hold has no place in the transcript, and the
+// rest of the file is somebody's: headings, corrections and notes written
+// after it was filed all sit between the turns.
+func DropTurns(content string, headers map[int]bool) (string, int) {
+	if len(headers) == 0 {
+		return content, 0
+	}
+
+	lines := strings.Split(content, "\n")
+	dropping := map[int]bool{}
+	dropped := 0
+	for header := range headers {
+		if header < 0 || header >= len(lines) || !turnHeader.MatchString(lines[header]) {
+			continue
+		}
+		for i := header; i < turnEnd(lines, header); i++ {
+			dropping[i] = true
+		}
+		dropped++
+	}
+	if dropped == 0 {
+		return content, 0
+	}
+
+	kept := make([]string, 0, len(lines))
+	for i, line := range lines {
+		if !dropping[i] {
+			kept = append(kept, line)
+		}
+	}
+	return strings.Join(kept, "\n"), dropped
+}
+
 // RewriteSpeakers puts a new name on the given turns and leaves the rest of the
 // file byte for byte as it was: a transcript gains frontmatter, headings and
 // corrections after it is written, and rendering it again would drop them.

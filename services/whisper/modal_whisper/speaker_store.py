@@ -107,6 +107,17 @@ class SpeakerStore:
                 created_at TEXT NOT NULL
             );
 
+            -- A voice the recording caught that the meeting did not hold:
+            -- somebody who walked in, somebody talking near the recorder. The
+            -- verdict lives with the voices rather than in a transcript
+            -- because a transcript is rendered again, and a turn deleted by
+            -- hand comes back the next time somebody fetches that recording.
+            CREATE TABLE IF NOT EXISTS outsiders (
+                voice_id TEXT PRIMARY KEY,
+                reason TEXT NOT NULL,
+                marked_by TEXT NOT NULL,
+                marked_at TEXT NOT NULL
+            );
         """)
 
     def _ensure_voice_ids(self):
@@ -255,6 +266,45 @@ class SpeakerStore:
             (row["person_id"], display(row), _unpack(row["embedding"]))
             for row in rows
         ]
+
+    def voices_of_person(self, person_id: int) -> list[list[float]]:
+        """Every voice learned for one person, which is what a name given to a
+        voice is measured against."""
+        rows = self._conn.execute(
+            "SELECT embedding FROM voices WHERE person_id = ?", (person_id,)
+        ).fetchall()
+        return [_unpack(row["embedding"]) for row in rows]
+
+    # -- voices the meeting did not hold ---------------------------------
+
+    def mark_outside(self, voice_id: str, reason: str, marked_by: str) -> None:
+        now = datetime.now(timezone.utc).isoformat()
+        self._conn.execute(
+            """INSERT INTO outsiders (voice_id, reason, marked_by, marked_at)
+               VALUES (?, ?, ?, ?)
+               ON CONFLICT(voice_id) DO UPDATE SET
+                 reason = excluded.reason,
+                 marked_by = excluded.marked_by,
+                 marked_at = excluded.marked_at""",
+            (voice_id, reason, marked_by, now),
+        )
+        self._conn.commit()
+
+    def clear_outside(self, voice_id: str) -> None:
+        """Take the verdict back, which is what naming the voice does: a voice
+        somebody puts a person to is a voice that was in the room."""
+        self._conn.execute("DELETE FROM outsiders WHERE voice_id = ?", (voice_id,))
+        self._conn.commit()
+
+    def outsiders(self, voice_ids: list[str]) -> set[str]:
+        """Which of these voices the meeting did not hold."""
+        if not voice_ids:
+            return set()
+        marks = ",".join("?" * len(voice_ids))
+        rows = self._conn.execute(
+            f"SELECT voice_id FROM outsiders WHERE voice_id IN ({marks})", voice_ids
+        ).fetchall()
+        return {row["voice_id"] for row in rows}
 
     # -- per-recording embeddings ---------------------------------------
 

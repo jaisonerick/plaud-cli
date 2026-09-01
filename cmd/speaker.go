@@ -14,6 +14,8 @@ var (
 	renameCompany    string
 	speakerNoSurname bool
 	speakerNewPerson bool
+	speakerDespite   bool
+	outsideReason    string
 	renameNoSurname  bool
 	speakerListLong  bool
 )
@@ -78,12 +80,52 @@ it really is somebody else.`,
 			}
 		}
 
-		person, err := whisper.NameSpeaker(ctx, recordingID, label, name, speakerCompany, speakerNoSurname)
+		person, err := whisper.NameSpeaker(ctx, recordingID, label, name, speakerCompany, speakerNoSurname, speakerDespite)
 		if err != nil {
 			return err
 		}
 
 		fmt.Printf("%s is %s — %d voice(s) on file\n", label, person.Display(), person.Voices)
+		return nil
+	},
+}
+
+var speakerOutsideCmd = &cobra.Command{
+	Use:   "outside <recording-id> <key> --reason <why>",
+	Short: "Say a voice is not part of the meeting",
+	Long: `Rule a voice out of the room, so its turns are left out of the transcript.
+
+A recording catches whoever is near it: somebody who walks in, somebody at the
+next table. Deleting those turns by hand does not hold, because the next
+rendering of that recording writes them again: the verdict belongs where the
+voices are, which is the service.
+
+The reason is what tells a voice left out for being somebody at the next table
+from one left out by mistake, and in six months neither the date nor the label
+says. Naming the voice takes the verdict back.
+
+Example:
+  plaud speaker outside e348561a6b26d65c9 SPEAKER_03 --reason "garcom"
+
+It is the same verdict 'plaud speaker identify' takes on its page. The
+transcripts already on disk lose those turns on the next 'plaud fetch' or
+'plaud sync', which decodes nothing.`,
+	Args: cobra.ExactArgs(2),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		if strings.TrimSpace(outsideReason) == "" {
+			return fmt.Errorf("--reason is required, so a transcript missing a stretch says why")
+		}
+
+		whisper, err := whisperClient()
+		if err != nil {
+			return err
+		}
+		voice, err := whisper.MarkOutside(cmd.Context(), args[0], args[1], outsideReason)
+		if err != nil {
+			return err
+		}
+
+		fmt.Printf("%s (%s) is not part of the meeting; its turns will be left out\n", args[1], voice)
 		return nil
 	},
 }
@@ -223,11 +265,13 @@ func init() {
 	speakerNameCmd.Flags().StringVar(&speakerCompany, "company", "", "the company this person is from (required)")
 	speakerNameCmd.Flags().BoolVar(&speakerNoSurname, "surname-unknown", false, "record somebody whose surname nobody knows; their company tells them apart")
 	speakerNameCmd.Flags().BoolVar(&speakerNewPerson, "new-person", false, "register the name even though it resembles somebody known")
+	speakerNameCmd.Flags().BoolVar(&speakerDespite, "despite-timbre", false, "name the voice even though the service holds it as somebody else")
+	speakerOutsideCmd.Flags().StringVar(&outsideReason, "reason", "", "why the meeting did not hold this voice (required)")
 	speakerRenameCmd.Flags().StringVar(&renameCompany, "company", "", "the company this person is from (required)")
 	speakerRenameCmd.Flags().BoolVar(&renameNoSurname, "surname-unknown", false, "record somebody whose surname nobody knows")
 	speakerListCmd.Flags().BoolVar(&speakerListLong, "long", false, "show the company and who added each person")
 
-	speakerCmd.AddCommand(speakerNameCmd)
+	speakerCmd.AddCommand(speakerNameCmd, speakerOutsideCmd)
 	speakerCmd.AddCommand(speakerRenameCmd)
 	speakerCmd.AddCommand(speakerForgetCmd)
 	speakerCmd.AddCommand(speakerListCmd)

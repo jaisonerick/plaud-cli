@@ -214,3 +214,46 @@ def test_the_id_of_a_voice_does_not_depend_on_who_works_it_out(tmp_path):
     again = SpeakerStore(str(tmp_path / "speakers.db"))
     assert list(again.voices_of("rec-1", [ids["SPEAKER_00"]])) == [ids["SPEAKER_00"]]
     again.close()
+
+
+def test_a_voice_the_meeting_did_not_hold_is_recorded_as_such(store):
+    store.save_audio_embeddings("rec1", {"SPEAKER_00": [1.0, 0.0], "SPEAKER_01": [0.0, 1.0]})
+    voice_id = store.voices_of("rec1", ["SPEAKER_01"])["SPEAKER_01"][0]
+
+    store.mark_outside(voice_id, "waiter", "someone@example.com")
+
+    assert store.outsiders([voice_id]) == {voice_id}
+
+
+def test_only_the_voice_marked_is_outside(store):
+    ids = store.save_audio_embeddings("rec1", {"SPEAKER_00": [1.0, 0.0], "SPEAKER_01": [0.0, 1.0]})
+    store.mark_outside(ids["SPEAKER_01"], "waiter", "someone@example.com")
+
+    assert store.outsiders(list(ids.values())) == {ids["SPEAKER_01"]}
+
+
+def test_the_verdict_is_taken_back(store):
+    ids = store.save_audio_embeddings("rec1", {"SPEAKER_00": [1.0, 0.0]})
+    store.mark_outside(ids["SPEAKER_00"], "walked in", "someone@example.com")
+
+    store.clear_outside(ids["SPEAKER_00"])
+
+    assert store.outsiders(list(ids.values())) == set()
+
+
+def test_marking_a_voice_outside_twice_keeps_the_last_reason(store):
+    ids = store.save_audio_embeddings("rec1", {"SPEAKER_00": [1.0, 0.0]})
+    store.mark_outside(ids["SPEAKER_00"], "waiter", "someone@example.com")
+    store.mark_outside(ids["SPEAKER_00"], "the next table", "other@example.com")
+
+    assert store.outsiders(list(ids.values())) == {ids["SPEAKER_00"]}
+
+
+def test_the_voices_of_one_person_are_what_a_name_is_measured_against(store):
+    person_id = store.upsert_person("Jaison Erick", "NexaEdge", "me@example.com")
+    other_id = store.upsert_person("Amanda Silva", "NexaEdge", "me@example.com")
+    store.add_voice(person_id, [1.0, 0.0], "me@example.com")
+    store.add_voice(person_id, [0.5, 0.5], "me@example.com")
+    store.add_voice(other_id, [0.0, 1.0], "me@example.com")
+
+    assert store.voices_of_person(person_id) == [[1.0, 0.0], [0.5, 0.5]]

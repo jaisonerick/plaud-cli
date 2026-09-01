@@ -13,6 +13,14 @@ import (
 	"strings"
 )
 
+// Contradiction is the service refusing a name because it holds that voice as
+// somebody else. Only whoever was in the room can overrule it, so it is an
+// error of its own rather than a message: both the page and the command have
+// to offer that, and neither should be reading it out of a string.
+type Contradiction struct{ Detail string }
+
+func (c Contradiction) Error() string { return c.Detail }
+
 // Person is somebody the service recognises.
 type Person struct {
 	Name      string `json:"name"`
@@ -78,12 +86,18 @@ func (c *HTTPClient) do(req *http.Request, out any) error {
 }
 
 // NameSpeaker gives a diarized voice a person, creating that person if needed.
-func (c *HTTPClient) NameSpeaker(ctx context.Context, audioID, speakerID, name, company string, surnameUnknown bool) (*Person, error) {
+//
+// despiteTimbre names a voice the service holds as somebody else. It refuses
+// that on its own, because a wrong voice under a name goes on claiming that
+// person in every transcription anybody makes; whoever was in the room is the
+// one who can overrule it.
+func (c *HTTPClient) NameSpeaker(ctx context.Context, audioID, speakerID, name, company string, surnameUnknown, despiteTimbre bool) (*Person, error) {
 	var buf bytes.Buffer
 	writer := multipart.NewWriter(&buf)
 	for field, value := range map[string]string{
 		"name": name, "company": company,
 		"surname_unknown": strconv.FormatBool(surnameUnknown),
+		"despite_timbre":  strconv.FormatBool(despiteTimbre),
 	} {
 		if err := writer.WriteField(field, value); err != nil {
 			return nil, fmt.Errorf("writing %s field: %w", field, err)
@@ -199,6 +213,101 @@ type VoiceMatch struct {
 	Voice    string   `json:"voice"`
 	Distance *float64 `json:"distance"`
 	Known    bool     `json:"known"`
+	// Outside says the meeting did not hold this voice, so its turns belong to
+	// nobody the transcript should be writing down.
+	Outside bool `json:"outside"`
+}
+
+// VoiceRef names one voice of one recording, which is all it takes to ask
+// about a voice: an id identifies it outright, and a label from a transcript
+// written before the ids needs the recording to mean anything.
+type VoiceRef struct {
+	Recording string `json:"recording"`
+	Key       string `json:"key"`
+}
+
+// Resemblance is somebody a voice sounds like, and how far the service puts it
+// from them. Under the threshold the service calls it the same person.
+type Resemblance struct {
+	Name     string  `json:"name"`
+	Distance float64 `json:"distance"`
+}
+
+// SameVoice is another of the voices asked about that is this same voice.
+type SameVoice struct {
+	VoiceRef
+	Distance float64 `json:"distance"`
+}
+
+// Heard is what the service can say about a voice nobody has named yet, from
+// the embeddings it already holds: no audio moves and nothing is decoded.
+type Heard struct {
+	VoiceRef
+	Voice     string        `json:"voice"`
+	Known     bool          `json:"known"`
+	Outside   bool          `json:"outside"`
+	Resembles []Resemblance `json:"resembles"`
+	SameAs    []SameVoice   `json:"same_as"`
+}
+
+// Resembles asks who a set of unnamed voices sound like, and which of them are
+// one voice. Threshold is what the service itself calls the same person, so
+// nothing downstream has to hold a copy of that number.
+func (c *HTTPClient) Resembles(ctx context.Context, refs []VoiceRef) (heard []Heard, threshold float64, err error) {
+	asked, err := json.Marshal(refs)
+	if err != nil {
+		return nil, 0, fmt.Errorf("marshaling the voices: %w", err)
+	}
+
+	var buf bytes.Buffer
+	writer := multipart.NewWriter(&buf)
+	if err := writer.WriteField("voices", string(asked)); err != nil {
+		return nil, 0, fmt.Errorf("writing voices field: %w", err)
+	}
+	if err := writer.Close(); err != nil {
+		return nil, 0, fmt.Errorf("closing multipart writer: %w", err)
+	}
+
+	req, err := c.request(ctx, http.MethodPost, "/speakers/resemblance", writer.FormDataContentType(), &buf)
+	if err != nil {
+		return nil, 0, err
+	}
+
+	var result struct {
+		Threshold float64 `json:"threshold"`
+		Voices    []Heard `json:"voices"`
+	}
+	if err := c.do(req, &result); err != nil {
+		return nil, 0, err
+	}
+	return result.Voices, result.Threshold, nil
+}
+
+// MarkOutside says a voice is not part of the meeting, so every rendering of
+// that recording leaves its turns out. It returns the id of the voice ruled
+// out, which is what a transcript asked by a label learns from this.
+func (c *HTTPClient) MarkOutside(ctx context.Context, audioID, key, reason string) (string, error) {
+	var buf bytes.Buffer
+	writer := multipart.NewWriter(&buf)
+	if err := writer.WriteField("reason", reason); err != nil {
+		return "", fmt.Errorf("writing reason field: %w", err)
+	}
+	writer.Close()
+
+	req, err := c.request(ctx, http.MethodPut,
+		fmt.Sprintf("/speakers/%s/%s/outside", url.PathEscape(audioID), url.PathEscape(key)),
+		writer.FormDataContentType(), &buf)
+	if err != nil {
+		return "", err
+	}
+
+	var result struct {
+		Voice string `json:"voice"`
+	}
+	if err := c.do(req, &result); err != nil {
+		return "", err
+	}
+	return result.Voice, nil
 }
 
 // RecordingVoices is the labels this service holds for a recording, which is

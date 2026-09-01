@@ -34,6 +34,28 @@ speaker_volume = modal.Volume.from_name("whisper-speakers", create_if_missing=Tr
 transcript_volume = modal.Volume.from_name("whisper-transcripts", create_if_missing=True)
 
 
+def _held_voice(store, audio_id: str, key: str):
+    """The voice a key stands for, or the 404 saying what the recording holds.
+
+    The key is the id a voice was given when the recording was separated, or
+    the label a transcript carries. An id answers whichever run it came from; a
+    label is one run's numbering and answers only while that run is the current
+    one, which is what makes naming from an old transcript ask by id.
+    """
+    from fastapi import HTTPException
+
+    held = store.voices_of(audio_id, [key]).get(key)
+    if held is not None:
+        return held
+
+    known = sorted(store.get_audio_embeddings(audio_id))
+    if known:
+        detail = f"{audio_id} has no voice {key!r}. It has: {', '.join(known)}"
+    else:
+        detail = f"nothing is stored for recording {audio_id} — transcribe it first"
+    raise HTTPException(status_code=404, detail=detail)
+
+
 def _person_json(person: dict) -> dict:
     """One shape for a person wherever this service returns one."""
     return {
@@ -191,11 +213,23 @@ class WhisperTranscriber:
                 if kept and wanted_language and wanted_language != kept.get("language", {}).get("code"):
                     kept = None
                 if kept:
-                    speakers = await _who_they_are_now(kept.get("voices", {}))
+                    voices = kept.get("voices", {})
+                    speakers, outside = await _who_they_are_now(voices)
+                    segments = [
+                        seg for seg in kept["segments"]
+                        if seg.get("speaker") not in outside
+                    ]
                     kept = {
                         **kept,
-                        "segments": with_names(kept["segments"], speakers),
-                        "speakers": speakers,
+                        "segments": with_names(segments, speakers),
+                        "speakers": {
+                            label: name for label, name in speakers.items()
+                            if label not in outside
+                        },
+                        "voices": {
+                            label: voice for label, voice in voices.items()
+                            if label not in outside
+                        },
                         "reused": True,
                     }
                     if stream:
@@ -260,39 +294,46 @@ class WhisperTranscriber:
             name: str = Form(...),
             company: str = Form(...),
             surname_unknown: bool = Form(False),
+            despite_timbre: bool = Form(False),
             who: Identity = Depends(caller),
         ):
             """Give a voice of a recording a person, creating that person if needed.
 
-            The key is the id a voice was given when the recording was
-            separated, or the label a transcript carries. An id answers
-            whichever run it came from; a label is one run's numbering and
-            answers only while that run is the current one, which is what makes
-            naming from an old transcript ask by id.
+            A name the store already contradicts is refused: the voice belongs
+            to somebody else it is confident about, and a wrong voice under a
+            name goes on claiming that person in every transcription anybody
+            makes. Whoever was in the room outranks the measurement, so
+            despite_timbre says so and names it anyway.
             """
+            from modal_whisper.speaker_match import contradiction
             from modal_whisper.speaker_store import NotFull
 
             store = await open_speaker_store()
             try:
-                found = store.voices_of(audio_id, [key])
-                held = found.get(key)
-                if held is None:
-                    known = sorted(store.get_audio_embeddings(audio_id))
-                    if known:
-                        detail = (
-                            f"{audio_id} has no voice {key!r}. It has: {', '.join(known)}"
+                held = _held_voice(store, audio_id, key)
+
+                claimed = store.person_id(name)
+                if claimed is not None and not despite_timbre:
+                    clash = contradiction(
+                        held[1], store.voices_of_person(claimed), store.all_voices()
+                    )
+                    if clash:
+                        theirs, distance, claimed_distance = clash
+                        raise HTTPException(
+                            status_code=409,
+                            detail=(
+                                f"this voice is {theirs}, {distance:.2f} away, and "
+                                f"{name} is {claimed_distance:.2f} away. Naming it "
+                                f"{name} anyway takes despite_timbre"
+                            ),
                         )
-                    else:
-                        detail = (
-                            f"nothing is stored for recording {audio_id} — "
-                            "transcribe it first"
-                        )
-                    raise HTTPException(status_code=404, detail=detail)
 
                 person_id = store.upsert_person(
                     name, company, who.email, surname_unknown
                 )
                 voices = store.add_voice(person_id, held[1], who.email)
+                # A voice somebody puts a person to was in the room after all.
+                store.clear_outside(held[0])
                 person = store.person(person_id)
             except NotFull as err:
                 raise HTTPException(status_code=400, detail=str(err)) from err
@@ -301,6 +342,101 @@ class WhisperTranscriber:
 
             await speaker_volume.commit.aio()
             return {"person": _person_json(person), "voices": voices, "voice": held[0]}
+
+        @api.put("/speakers/{audio_id}/{key}/outside")
+        async def voice_outside(
+            audio_id: str,
+            key: str,
+            reason: str = Form(...),
+            who: Identity = Depends(caller),
+        ):
+            """Say a voice is not part of the meeting, so its turns are dropped.
+
+            A recording catches whoever is near it: somebody who walks in,
+            somebody at the next table. Naming the voice takes the verdict back.
+            """
+            if not reason.strip():
+                raise HTTPException(
+                    status_code=400,
+                    detail="a reason is required: what tells a voice left out for "
+                           "being somebody at the next table from one left out by "
+                           "mistake is the reason",
+                )
+
+            store = await open_speaker_store()
+            try:
+                held = _held_voice(store, audio_id, key)
+                store.mark_outside(held[0], reason.strip(), who.email)
+            finally:
+                store.close()
+
+            await speaker_volume.commit.aio()
+            return {"voice": held[0], "reason": reason.strip()}
+
+        @api.post("/speakers/resemblance")
+        async def resemblance(voices: str = Form(...)):
+            """Who each of these voices sounds like, and which are one voice.
+
+            What a page putting people to voices needs before anybody types,
+            offered as evidence rather than as a name: a voice under the
+            threshold would already have been named by the transcription, so
+            everything here is a resemblance somebody has to settle.
+
+            `voices` is [{"recording": str, "key": str}]. Nothing is decoded and
+            no audio moves: this is arithmetic over embeddings already stored.
+            """
+            from modal_whisper.speaker_match import DEFAULT_THRESHOLD, alike, ranked
+
+            asked = json.loads(voices)
+
+            by_recording: dict[str, list[str]] = {}
+            for entry in asked:
+                by_recording.setdefault(entry["recording"], []).append(entry["key"])
+
+            store = await open_speaker_store()
+            try:
+                known = store.all_voices()
+                found = {}
+                for recording, keys in by_recording.items():
+                    for key, held in store.voices_of(recording, keys).items():
+                        found[(recording, key)] = held
+                marked = store.outsiders([held[0] for held in found.values()])
+            finally:
+                store.close()
+
+            embeddings = []
+            for position, entry in enumerate(asked):
+                held = found.get((entry["recording"], entry["key"]))
+                if held is not None:
+                    embeddings.append((str(position), held[1]))
+            same = alike(embeddings)
+
+            answers = []
+            for position, entry in enumerate(asked):
+                held = found.get((entry["recording"], entry["key"]))
+                if held is None:
+                    answers.append({
+                        **entry, "voice": "", "known": False, "outside": False,
+                        "resembles": [], "same_as": [],
+                    })
+                    continue
+                voice_id, embedding = held
+                answers.append({
+                    **entry,
+                    "voice": voice_id,
+                    "known": True,
+                    "outside": voice_id in marked,
+                    "resembles": [
+                        {"name": person, "distance": distance}
+                        for person, distance in ranked(embedding, known)
+                    ],
+                    "same_as": [
+                        {**asked[int(other)], "distance": distance}
+                        for other, distance in same[str(position)]
+                    ],
+                })
+
+            return {"threshold": DEFAULT_THRESHOLD, "voices": answers}
 
         @api.get("/speakers/{audio_id}")
         async def recording_voices(audio_id: str, who: Identity = Depends(caller)):
@@ -339,6 +475,7 @@ class WhisperTranscriber:
             try:
                 embeddings = store.voices_of(audio_id, wanted)
                 known = store.all_voices()
+                marked = store.outsiders([held[0] for held in embeddings.values()])
             finally:
                 store.close()
 
@@ -347,7 +484,8 @@ class WhisperTranscriber:
                 found = embeddings.get(key)
                 if found is None:
                     voices.append(
-                        {"key": key, "voice": "", "name": "", "distance": None, "known": False}
+                        {"key": key, "voice": "", "name": "", "distance": None,
+                         "known": False, "outside": False}
                     )
                     continue
                 voice_id, embedding = found
@@ -355,13 +493,17 @@ class WhisperTranscriber:
                 name, distance = hit if hit else ("", None)
                 if distance is None or distance >= DEFAULT_THRESHOLD:
                     name = ""
+                # A voice the meeting did not hold is nobody as far as a
+                # transcript is concerned, however much it sounds like somebody.
+                outside = voice_id in marked
                 voices.append(
                     {
                         "key": key,
                         "voice": voice_id,
-                        "name": name,
+                        "name": "" if outside else name,
                         "distance": distance,
                         "known": True,
+                        "outside": outside,
                     }
                 )
 
@@ -461,35 +603,42 @@ class WhisperTranscriber:
         return web_app
 
 
-async def _who_they_are_now(voices: dict) -> dict:
-    """Who each label of a kept transcript is today.
+async def _who_they_are_now(voices: dict) -> tuple[dict, set[str]]:
+    """Who each label of a kept transcript is today, and which labels the
+    meeting did not hold.
 
     The transcript holds the id of the voice behind each label, and who that
     voice is comes from the people known right now: a name settled after a
-    recording was transcribed has to reach the transcript of it.
+    recording was transcribed has to reach the transcript of it, and so does a
+    voice somebody has since ruled out of the room.
     """
     from modal_whisper.speaker_match import DEFAULT_THRESHOLD, nearest
 
     if not voices:
-        return {}
+        return {}, set()
 
     store = await open_speaker_store()
     try:
         found = store.voices_of("", list(voices.values()))
         known = store.all_voices()
+        marked = store.outsiders([held[0] for held in found.values()])
     finally:
         store.close()
 
     speakers = {}
+    outside = set()
     for label, voice_id in voices.items():
         speakers[label] = label
         held = found.get(voice_id)
         if held is None:
             continue
+        if held[0] in marked:
+            outside.add(label)
+            continue
         hit = nearest(held[1], known)
         if hit and hit[1] < DEFAULT_THRESHOLD:
             speakers[label] = hit[0]
-    return speakers
+    return speakers, outside
 
 
 def _one_event(result: dict):
