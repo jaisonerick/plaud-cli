@@ -127,8 +127,13 @@ class WhisperTranscriber:
             device="cuda", hf_token=os.environ.get("HF_TOKEN", "")
         )
 
+        # Polishing is the only stage that pays for a model, and measured over
+        # one meeting against five others this one corrected more proper nouns
+        # than Sonnet 5 at a sixteenth of the cost and a ninth of the wall time.
+        # What it does worse is smooth a speaker out, writing "para" for "pra",
+        # which the prompt forbids and the guard does not yet catch.
         self.llm = LLMClient(
-            model="openrouter/anthropic/claude-sonnet-5",
+            model="openrouter/google/gemini-3.1-flash-lite",
             api_key=os.environ["OPENROUTER_API_KEY"],
         )
 
