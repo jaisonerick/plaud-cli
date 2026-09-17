@@ -20,7 +20,7 @@ A FastAPI app anyone can reach, guarded by a Google sign-in rather than by crede
 | `DELETE /speakers` | Drop every sample of a name, for a voice learned from the wrong person. |
 | `GET /speakers` | The voices known, each with how many samples back it. |
 
-`options` accepts `language`, `context_doc`, `diarize`, `speaker_recognition`, `speaker_threshold`, `polish`, `compact` and `compact_gap`. `internal/modal/http.go` is the Go client for all three routes, and `modal_whisper/builder.py` runs the stages.
+`options` accepts `recording_id`, which every transcription needs, plus `language`, `context_doc`, `force` and `polish`. Turning `polish` off returns the segments as the recogniser wrote them and stores nothing, which is how the polishing stage is measured against its own input. `internal/modal/http.go` is the Go client for all three routes, and `modal_whisper/builder.py` runs the stages.
 
 Segments follow `segment_schema.json`, shared with the Go `Segment` struct. A diarized result also carries `embeddings`, one 256-dimension vector per speaker label, which is what lets the caller name a voice long after the recording was processed.
 

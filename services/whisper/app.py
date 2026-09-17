@@ -208,9 +208,12 @@ class WhisperTranscriber:
             # written from the run before points at voices that are gone.
             # A language settled by the caller is a statement that what is on
             # record came back in the wrong one, so it is not what to hand back.
+            # Nothing on record was left unpolished either, so a caller asking
+            # for the recogniser's own words is asking for a run.
             wanted_language = opts_json.get("language", "")
+            polish = opts_json.get("polish", True)
 
-            if not opts_json.get("force"):
+            if polish and not opts_json.get("force"):
                 transcripts = await open_transcripts()
                 kept = transcripts.get(recording_id)
                 if kept and wanted_language and wanted_language != kept.get("language", {}).get("code"):
@@ -245,14 +248,20 @@ class WhisperTranscriber:
                 language=opts_json.get("language", ""),
                 context_doc=opts_json.get("context_doc", ""),
                 recording_id=recording_id,
+                polish=polish,
             )
 
             await speaker_volume.reload.aio()
             pipeline = TranscriptionPipeline(self.whisper_model, self.llm)
 
             def keep(result):
-                """Store what was decoded, with the labels the run gave it."""
-                if not result.get("segments"):
+                """Store what was decoded, with the labels the run gave it.
+
+                A run that skipped polishing is not stored. It would be handed
+                to the next caller as this recording's transcript, and it is
+                the draft the polisher was given rather than the transcript.
+                """
+                if not result.get("segments") or not opts.polish:
                     return
                 from modal_whisper.transcript_store import TranscriptStore
 

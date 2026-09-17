@@ -27,6 +27,9 @@ class TranscribeOptions:
     language: str = ""
     context_doc: str = ""
     recording_id: str = ""
+    # Off leaves the words as the recogniser wrote them, which is the only way
+    # to see what polishing changed.
+    polish: bool = True
 
 
 class TranscriptionPipeline:
@@ -60,9 +63,13 @@ class TranscriptionPipeline:
         # be written down somewhere, and the only somewhere is a caller's disk.
         audio_id = opts.recording_id
 
+        # What the caller knows about the meeting reaches the transcript
+        # through the polisher and nowhere else.
+        extracting_context = opts.polish and bool(opts.context_doc)
+
         # 1. Declare pipeline stages
         stages = []
-        if opts.context_doc:
+        if extracting_context:
             stages.append({"id": "context", "label": "Extracting context"})
         stages.append({"id": "transcribe", "label": "Transcribing audio"})
         stages.append({"id": "align", "label": "Aligning timestamps"})
@@ -71,7 +78,8 @@ class TranscriptionPipeline:
         stages.append({"id": "segment_convert", "label": "Converting segments"})
         stages.append({"id": "speaker_recognition", "label": "Recognizing speakers"})
         stages.append({"id": "compact", "label": "Compacting segments"})
-        stages.append({"id": "polish", "label": "Polishing transcript"})
+        if opts.polish:
+            stages.append({"id": "polish", "label": "Polishing transcript"})
 
         yield {"type": "init", "stages": stages}
 
@@ -82,7 +90,7 @@ class TranscriptionPipeline:
         #    of the audio, so a term the document names is a term the recording
         #    gains.
         context_summary = ""
-        if opts.context_doc:
+        if extracting_context:
             yield _update("context", "started")
             ctx = ContextExtractor(self._llm, opts.context_doc).run()
             context_summary = ctx.context_summary
@@ -214,40 +222,41 @@ class TranscriptionPipeline:
         #     will correct Whisper's output back to that language if Whisper
         #     auto-detected wrong. When empty, polishes in whatever language
         #     Whisper produced.
-        polisher = Polisher(self._llm, context_summary, language=opts.language)
-        yield _update("polish", "started", detail="0 chunks")
+        if opts.polish:
+            polisher = Polisher(self._llm, context_summary, language=opts.language)
+            yield _update("polish", "started", detail="0 chunks")
 
-        polished = []
-        total_chunks = 0
-        no_correction = 0
-        no_answer = 0
-        try:
-            for i, total, result in polisher.run_iter(segments):
-                total_chunks = total
-                if result.answered:
-                    no_correction += result.refused
-                else:
-                    no_answer += result.refused
-                polished.extend(result.segments)
+            polished = []
+            total_chunks = 0
+            no_correction = 0
+            no_answer = 0
+            try:
+                for i, total, result in polisher.run_iter(segments):
+                    total_chunks = total
+                    if result.answered:
+                        no_correction += result.refused
+                    else:
+                        no_answer += result.refused
+                    polished.extend(result.segments)
+                    yield _update(
+                        "polish",
+                        "progress",
+                        detail=f"{i + 1}/{total} chunks",
+                        progress={"current": i + 1, "total": total},
+                    )
+            except Exception as err:
+                # Polishing runs last, on a transcript the GPU has already
+                # finished. Anything the LLM does — refusing, timing out,
+                # running out of credit — costs the wording, never the run.
+                yield _update("polish", "done", detail=_polish_failure(err))
+            else:
+                segments = polished
+                refused, unanswered = no_correction, no_answer
                 yield _update(
                     "polish",
-                    "progress",
-                    detail=f"{i + 1}/{total} chunks",
-                    progress={"current": i + 1, "total": total},
+                    "done",
+                    detail=_polish_done(total_chunks, no_correction, no_answer),
                 )
-        except Exception as err:
-            # Polishing runs last, on a transcript the GPU has already
-            # finished. Anything the LLM does — refusing, timing out,
-            # running out of credit — costs the wording, never the run.
-            yield _update("polish", "done", detail=_polish_failure(err))
-        else:
-            segments = polished
-            refused, unanswered = no_correction, no_answer
-            yield _update(
-                "polish",
-                "done",
-                detail=_polish_done(total_chunks, no_correction, no_answer),
-            )
 
         # No embedding leaves this service. They are voices of people who never
         # agreed to be on anybody's laptop, and the store is shared, so every
