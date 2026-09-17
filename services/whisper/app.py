@@ -98,7 +98,10 @@ async def open_speaker_store():
         modal.Secret.from_name("google-oauth"),
     ],
     volumes={"/cache": model_cache, "/speakers": speaker_volume, "/transcripts": transcript_volume},
-    timeout=600,
+    # A whole transcription runs inside one request, at roughly a minute of it
+    # per ten minutes of audio, so this bounds how long a recording may be.
+    # Modal cancels at the ceiling and nothing decoded is kept.
+    timeout=3600,
     scaledown_window=120,
 )
 class WhisperTranscriber:
