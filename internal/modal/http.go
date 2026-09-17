@@ -318,7 +318,7 @@ func (c *HTTPClient) TranscribeStream(ctx context.Context, audioData []byte, opt
 				strings.Contains(errStr, "eof") ||
 				strings.Contains(errStr, "internal_error") ||
 				strings.Contains(errStr, "stream error") {
-				errCh <- fmt.Errorf("server connection lost — the container likely crashed (possibly GPU out of memory). Try again in a few minutes")
+				errCh <- fmt.Errorf("the connection to the service dropped before the transcript arrived, and the service's own log says what stopped it")
 				return
 			}
 			errCh <- fmt.Errorf("reading SSE stream: %w", err)
