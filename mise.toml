@@ -1,0 +1,10 @@
+[tools]
+go = "1.25.0"
+
+[tasks.build]
+description = "Build the plaud binary"
+run = "go build -o plaud ."
+
+[tasks.test]
+description = "Run the test suite"
+run = "go test ./..."
