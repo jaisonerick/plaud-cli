@@ -14,17 +14,34 @@ const pageHTML = `<!doctype html>
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light dark">
 <title>Quem está falando</title>
+<script>
+  try { const t = localStorage.getItem('theme'); if (t === 'light' || t === 'dark') document.documentElement.dataset.theme = t; } catch (e) {}
+</script>
 <style>
   :root {
-    --bg: #f6f6f5; --card: #fff; --ink: #1a1a1a; --muted: #6b6b6b;
+    color-scheme: light;
+    --bg: #f6f6f5; --card: #fff; --ink: #1a1a1a; --muted: #5c5c5c;
     --line: #e5e5e3; --accent: #2563eb; --ok: #15803d; --bad: #b91c1c;
+    --on-accent: #fff; --on-bad: #fff;
     --hint: #f0f4ff; --hint-line: #c7d7fe;
   }
-  @media (prefers-color-scheme: dark) {
-    :root {
-      --bg: #16161a; --card: #1f1f24; --ink: #ececed; --muted: #9b9ba1;
+  @media screen and (prefers-color-scheme: dark) {
+    :root:where(:not([data-theme="light"])) {
+      color-scheme: dark;
+      --bg: #16161a; --card: #1f1f24; --ink: #ececed; --muted: #a2a2a8;
       --line: #303038; --accent: #6ea8ff; --ok: #4ade80; --bad: #f87171;
+      --on-accent: #16161a; --on-bad: #16161a;
+      --hint: #1e2434; --hint-line: #33436b;
+    }
+  }
+  @media screen {
+    :root[data-theme="dark"] {
+      color-scheme: dark;
+      --bg: #16161a; --card: #1f1f24; --ink: #ececed; --muted: #a2a2a8;
+      --line: #303038; --accent: #6ea8ff; --ok: #4ade80; --bad: #f87171;
+      --on-accent: #16161a; --on-bad: #16161a;
       --hint: #1e2434; --hint-line: #33436b;
     }
   }
@@ -57,8 +74,8 @@ const pageHTML = `<!doctype html>
             padding: .45rem 0; border-top: 1px solid var(--line); }
   .sample:first-of-type { border-top: none; }
   .play { flex: 0 0 auto; width: 34px; height: 34px; border: none; border-radius: 50%;
-          background: var(--accent); color: #fff; cursor: pointer; font-size: .8rem; }
-  .play.on { background: var(--bad); }
+          background: var(--accent); color: var(--on-accent); cursor: pointer; font-size: .8rem; }
+  .play.on { background: var(--bad); color: var(--on-bad); }
   .said { font-size: .88rem; }
   .at { color: var(--muted); font-size: .74rem; }
   .row { display: flex; gap: .5rem; margin-top: .9rem; flex-wrap: wrap; }
@@ -67,7 +84,7 @@ const pageHTML = `<!doctype html>
          background: var(--bg); color: var(--ink); }
   input:focus { outline: 2px solid var(--accent); outline-offset: -1px; }
   button.save { padding: .5rem 1rem; border: none; border-radius: 7px; cursor: pointer;
-                background: var(--accent); color: #fff; font-size: .9rem; }
+                background: var(--accent); color: var(--on-accent); font-size: .9rem; }
   button.save:disabled { opacity: .5; cursor: default; }
   button.ghost { padding: .35rem .75rem; border: 1px solid var(--line); border-radius: 7px;
                  background: transparent; color: var(--muted); cursor: pointer; font-size: .82rem; }
@@ -81,10 +98,28 @@ const pageHTML = `<!doctype html>
   footer button { padding: .5rem 1.2rem; border: 1px solid var(--line); border-radius: 7px;
                   background: transparent; color: var(--ink); cursor: pointer; font-size: .9rem; }
   .count { color: var(--muted); font-size: .85rem; margin-right: .8rem; }
+  header.top { display: flex; align-items: flex-start; justify-content: space-between; gap: 1rem; }
+  .theme-toggle { flex: none; display: grid; place-items: center; width: 36px; height: 36px;
+                  padding: 0; border: 1px solid var(--line); border-radius: 8px;
+                  background: var(--card); color: var(--muted); cursor: pointer; }
+  .theme-toggle:hover { color: var(--ink); border-color: var(--muted); }
+  .theme-toggle:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  .theme-toggle svg { display: none; }
+  .theme-toggle[data-state="light"] .i-light,
+  .theme-toggle[data-state="dark"] .i-dark,
+  .theme-toggle[data-state="system"] .i-system { display: block; }
+  @media print { .theme-toggle { display: none; } }
 </style>
 </head>
 <body>
+<header class="top">
 <h1>Quem está falando</h1>
+<button type="button" class="theme-toggle no-print">
+  <svg class="i-light" viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></svg>
+  <svg class="i-dark" viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z"/></svg>
+  <svg class="i-system" viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M12 3a9 9 0 0 1 0 18z" fill="currentColor" stroke="none"/></svg>
+</button>
+</header>
 <p class="lede">Ouça, escreva quem é, e salve. Cada nome é guardado na hora, e vale para
 todas as transcrições em que essa voz aparecer. Deixe em branco o que você não souber.
 Quando o serviço já ouviu essa voz antes, ele diz de quem ela mais se parece: é indício,
@@ -98,6 +133,36 @@ não resposta. Voz que o gravador pegou e a reunião não teve sai por “não �
   <button onclick="finish()">Terminei</button>
 </footer>
 
+<script>
+(() => {
+  const root = document.documentElement;
+  const media = matchMedia('(prefers-color-scheme: dark)');
+  const btn = document.querySelector('.theme-toggle');
+  const LABEL = { system: 'sistema', light: 'claro', dark: 'escuro' };
+  const current = () => root.dataset.theme || 'system';
+  const next = (s) => {
+    const shown = media.matches ? 'dark' : 'light';
+    const opposite = shown === 'dark' ? 'light' : 'dark';
+    return s === 'system' ? opposite : s === opposite ? shown : 'system';
+  };
+  const paint = () => {
+    const s = current();
+    btn.dataset.state = s;
+    const label = 'Tema: ' + LABEL[s] + '. Mudar para ' + LABEL[next(s)];
+    btn.setAttribute('aria-label', label);
+    btn.title = label;
+  };
+  const changed = () => document.dispatchEvent(new CustomEvent('themechange'));
+  btn.addEventListener('click', () => {
+    const s = next(current());
+    if (s === 'system') { delete root.dataset.theme; try { localStorage.removeItem('theme'); } catch (e) {} }
+    else { root.dataset.theme = s; try { localStorage.setItem('theme', s); } catch (e) {} }
+    paint(); changed();
+  });
+  media.addEventListener('change', () => { paint(); if (current() === 'system') changed(); });
+  paint();
+})();
+</script>
 <script>
 const VOICES = {{.VoicesJSON}};
 const KNOWN = {{.KnownJSON}};
